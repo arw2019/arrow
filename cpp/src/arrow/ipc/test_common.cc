@@ -79,10 +79,44 @@ Status MakeRandomInt32Array(int64_t length, bool include_nulls, MemoryPool* pool
   return Status::OK();
 }
 
+namespace {
+
+template <typename ArrayType>
+Status MakeRandomArray(int64_t length, bool include_nulls, MemoryPool* pool,
+                       std::shared_ptr<Array>* out, uint32_t seed) {
+  random::RandomArrayGenerator rand(seed);
+  const double null_probability = include_nulls ? 0.5 : 0.0;
+
+  *out = rand.Numeric<ArrayType>(length, 0, 1000, null_probability);
+
+  return Status::OK();
+}
+
+template <>
+Status MakeRandomArray<Int8Type>(int64_t length, bool include_nulls, MemoryPool* pool,
+                                 std::shared_ptr<Array>* out, uint32_t seed) {
+  random::RandomArrayGenerator rand(seed);
+  const double null_probability = include_nulls ? 0.5 : 0.0;
+
+  *out = rand.Numeric<Int8Type>(length, 0, 127, null_probability);
+
+  return Status::OK();
+}
+
+template <>
+Status MakeRandomArray<UInt8Type>(int64_t length, bool include_nulls, MemoryPool* pool,
+                                  std::shared_ptr<Array>* out, uint32_t seed) {
+  random::RandomArrayGenerator rand(seed);
+  const double null_probability = include_nulls ? 0.5 : 0.0;
+
+  *out = rand.Numeric<UInt8Type>(length, 0, 127, null_probability);
+
+  return Status::OK();
+}
+
 template <typename TypeClass>
-static Status MakeListArray(const std::shared_ptr<Array>& child_array, int num_lists,
-                            bool include_nulls, MemoryPool* pool,
-                            std::shared_ptr<Array>* out) {
+Status MakeListArray(const std::shared_ptr<Array>& child_array, int num_lists,
+                     bool include_nulls, MemoryPool* pool, std::shared_ptr<Array>* out) {
   using offset_type = typename TypeClass::offset_type;
   using ArrayType = typename TypeTraits<TypeClass>::ArrayType;
 
@@ -128,6 +162,8 @@ static Status MakeListArray(const std::shared_ptr<Array>& child_array, int num_l
                                      kUnknownNullCount);
   return (**out).Validate();
 }
+
+}  // namespace
 
 Status MakeRandomListArray(const std::shared_ptr<Array>& child_array, int num_lists,
                            bool include_nulls, MemoryPool* pool,
@@ -194,21 +230,74 @@ Status MakeBooleanBatch(std::shared_ptr<RecordBatch>* out) {
 
 Status MakeIntBatchSized(int length, std::shared_ptr<RecordBatch>* out, uint32_t seed) {
   // Make the schema
-  auto f0 = field("f0", int32());
-  auto f1 = field("f1", int32());
-  auto schema = ::arrow::schema({f0, f1});
+  auto f0 = field("f0", int8());
+  auto f1 = field("f1", uint8());
+  auto f2 = field("f2", int16());
+  auto f3 = field("f3", uint16());
+  auto f4 = field("f4", int32());
+  auto f5 = field("f5", uint32());
+  auto f6 = field("f6", int64());
+  auto f7 = field("f7", uint64());
+  auto schema = ::arrow::schema({f0, f1, f2, f3, f4, f5, f6, f7});
 
   // Example data
-  std::shared_ptr<Array> a0, a1;
+  std::shared_ptr<Array> a0, a1, a2, a3, a4, a5, a6, a7;
   MemoryPool* pool = default_memory_pool();
-  RETURN_NOT_OK(MakeRandomInt32Array(length, false, pool, &a0, seed));
-  RETURN_NOT_OK(MakeRandomInt32Array(length, true, pool, &a1, seed + 1));
-  *out = RecordBatch::Make(schema, length, {a0, a1});
+  RETURN_NOT_OK(MakeRandomArray<Int8Type>(length, false, pool, &a0, seed));
+  RETURN_NOT_OK(MakeRandomArray<UInt8Type>(length, true, pool, &a1, seed));
+  RETURN_NOT_OK(MakeRandomArray<Int16Type>(length, true, pool, &a2, seed));
+  RETURN_NOT_OK(MakeRandomArray<UInt16Type>(length, false, pool, &a3, seed));
+  RETURN_NOT_OK(MakeRandomArray<Int32Type>(length, false, pool, &a4, seed));
+  RETURN_NOT_OK(MakeRandomArray<UInt32Type>(length, true, pool, &a5, seed));
+  RETURN_NOT_OK(MakeRandomArray<Int64Type>(length, true, pool, &a6, seed));
+  RETURN_NOT_OK(MakeRandomArray<UInt64Type>(length, false, pool, &a7, seed));
+  *out = RecordBatch::Make(schema, length, {a0, a1, a2, a3, a4, a5, a6, a7});
   return Status::OK();
 }
 
 Status MakeIntRecordBatch(std::shared_ptr<RecordBatch>* out) {
   return MakeIntBatchSized(10, out);
+}
+
+Status MakeFloat3264BatchSized(int length, std::shared_ptr<RecordBatch>* out,
+                               uint32_t seed) {
+  // Make the schema
+  auto f0 = field("f0", float32());
+  auto f1 = field("f1", float64());
+  auto schema = ::arrow::schema({f0, f1});
+
+  // Example data
+  std::shared_ptr<Array> a0, a1;
+  MemoryPool* pool = default_memory_pool();
+  RETURN_NOT_OK(MakeRandomArray<FloatType>(length, false, pool, &a0, seed));
+  RETURN_NOT_OK(MakeRandomArray<DoubleType>(length, true, pool, &a1, seed + 1));
+  *out = RecordBatch::Make(schema, length, {a0, a1});
+  return Status::OK();
+}
+
+Status MakeFloat3264Batch(std::shared_ptr<RecordBatch>* out) {
+  return MakeFloat3264BatchSized(10, out);
+}
+
+Status MakeFloatBatchSized(int length, std::shared_ptr<RecordBatch>* out, uint32_t seed) {
+  // Make the schema
+  auto f0 = field("f0", float16());
+  auto f1 = field("f1", float32());
+  auto f2 = field("f2", float64());
+  auto schema = ::arrow::schema({f0, f1, f2});
+
+  // Example data
+  std::shared_ptr<Array> a0, a1, a2;
+  MemoryPool* pool = default_memory_pool();
+  RETURN_NOT_OK(MakeRandomArray<HalfFloatType>(length, false, pool, &a0, seed));
+  RETURN_NOT_OK(MakeRandomArray<FloatType>(length, false, pool, &a1, seed + 1));
+  RETURN_NOT_OK(MakeRandomArray<DoubleType>(length, true, pool, &a2, seed + 2));
+  *out = RecordBatch::Make(schema, length, {a0, a1, a2});
+  return Status::OK();
+}
+
+Status MakeFloatBatch(std::shared_ptr<RecordBatch>* out) {
+  return MakeFloatBatchSized(10, out);
 }
 
 Status MakeRandomStringArray(int64_t length, bool include_nulls, MemoryPool* pool,
@@ -534,12 +623,24 @@ Status MakeDictionary(std::shared_ptr<RecordBatch>* out) {
   auto dict4 = ArrayFromJSON(dict4_ty, "[[44, 55], [], [66]]");
   auto a4 = std::make_shared<DictionaryArray>(f4_type, indices4, dict4);
 
-  // construct batch
-  auto schema = ::arrow::schema(
-      {field("dict1", f0_type), field("dict2", f1_type), field("dict3", f2_type),
-       field("list<encoded utf8>", f3_type), field("encoded list<int8>", f4_type)});
+  std::vector<std::shared_ptr<Field>> fields = {
+      field("dict1", f0_type), field("dict2", f1_type), field("dict3", f2_type),
+      field("list<encoded utf8>", f3_type), field("encoded list<int8>", f4_type)};
+  std::vector<std::shared_ptr<Array>> arrays = {a0, a1, a2, a3, a4};
 
-  *out = RecordBatch::Make(schema, length, {a0, a1, a2, a3, a4});
+  // Ensure all dictionary index types are represented
+  int field_index = 5;
+  for (auto index_ty : all_dictionary_index_types()) {
+    std::stringstream ss;
+    ss << "dict" << field_index++;
+    auto ty = arrow::dictionary(index_ty, dict_ty);
+    auto indices = ArrayFromJSON(index_ty, "[0, 1, 2, 0, 2, 2]");
+    fields.push_back(field(ss.str(), ty));
+    arrays.push_back(std::make_shared<DictionaryArray>(ty, indices, dict1));
+  }
+
+  // construct batch
+  *out = RecordBatch::Make(::arrow::schema(fields), length, arrays);
   return Status::OK();
 }
 

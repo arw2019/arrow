@@ -17,27 +17,6 @@
 
 import warnings
 
-from cpython.object cimport Py_LT, Py_EQ, Py_GT, Py_LE, Py_NE, Py_GE
-
-
-cdef str _op_to_function_name(int op):
-    cdef str function_name
-
-    if op == Py_EQ:
-        function_name = "equal"
-    elif op == Py_NE:
-        function_name = "not_equal"
-    elif op == Py_GT:
-        function_name = "greater"
-    elif op == Py_GE:
-        function_name = "greater_equal"
-    elif op == Py_LT:
-        function_name = "less"
-    elif op == Py_LE:
-        function_name = "less_equal"
-
-    return function_name
-
 
 cdef _sequence_to_array(object sequence, object mask, object size,
                         DataType type, CMemoryPool* pool, c_bool from_pandas):
@@ -317,6 +296,38 @@ def asarray(values, type=None):
 
 
 def nulls(size, type=None, MemoryPool memory_pool=None):
+    """
+    Create a strongly-typed Array instance with all elements null.
+
+    Parameters
+    ----------
+    size : int
+        Array length.
+    type : pyarrow.DataType, default None
+        Explicit type for the array. By default use NullType.
+    memory_pool : MemoryPool, default None
+        Arrow MemoryPool to use for allocations. Uses the default memory
+        pool is not passed.
+
+    Returns
+    -------
+    arr : Array
+
+    Examples
+    --------
+    >>> import pyarrow as pa
+    >>> pa.nulls(10)
+    <pyarrow.lib.NullArray object at 0x7ffaf04c2e50>
+    10 nulls
+
+    >>> pa.nulls(3, pa.uint32())
+    <pyarrow.lib.UInt32Array object at 0x7ffaf04c2e50>
+    [
+      null,
+      null,
+      null
+    ]
+    """
     cdef:
         CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
         int64_t length = size
@@ -332,6 +343,94 @@ def nulls(size, type=None, MemoryPool memory_pool=None):
         arr = GetResultValue(MakeArrayOfNull(ty, length, pool))
 
     return pyarrow_wrap_array(arr)
+
+
+def repeat(value, size, MemoryPool memory_pool=None):
+    """
+    Create an Array instance whose slots are the given scalar.
+
+    Parameters
+    ----------
+    value: Scalar-like object
+        Either a pyarrow.Scalar or any python object coercible to a Scalar.
+    size : int
+        Number of times to repeat the scalar in the output Array.
+    memory_pool : MemoryPool, default None
+        Arrow MemoryPool to use for allocations. Uses the default memory
+        pool is not passed.
+
+    Returns
+    -------
+    arr : Array
+
+    Examples
+    --------
+    >>> import pyarrow as pa
+    >>> pa.repeat(10, 3)
+    <pyarrow.lib.Int64Array object at 0x7ffac03a2750>
+    [
+      10,
+      10,
+      10
+    ]
+
+    >>> pa.repeat([1, 2], 2)
+    <pyarrow.lib.ListArray object at 0x7ffaf04c2e50>
+    [
+      [
+        1,
+        2
+      ],
+      [
+        1,
+        2
+      ]
+    ]
+
+    >>> pa.repeat("string", 3)
+    <pyarrow.lib.StringArray object at 0x7ffac03a2750>
+    [
+      "string",
+      "string",
+      "string"
+    ]
+
+    >>> pa.repeat(pa.scalar({'a': 1, 'b': [1, 2]}), 2)
+    <pyarrow.lib.StructArray object at 0x7ffac03a2750>
+    -- is_valid: all not null
+    -- child 0 type: int64
+      [
+        1,
+        1
+      ]
+    -- child 1 type: list<item: int64>
+      [
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          2
+        ]
+      ]
+    """
+    cdef:
+        CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
+        int64_t length = size
+        shared_ptr[CArray] c_array
+        shared_ptr[CScalar] c_scalar
+
+    if not isinstance(value, Scalar):
+        value = scalar(value, memory_pool=memory_pool)
+
+    c_scalar = (<Scalar> value).unwrap()
+    with nogil:
+        c_array = GetResultValue(
+            MakeArrayFromScalar(deref(c_scalar), length, pool)
+        )
+
+    return pyarrow_wrap_array(c_array)
 
 
 def infer_type(values, mask=None, from_pandas=False):
@@ -653,10 +752,6 @@ cdef class Array(_PandasConvertible):
         with nogil:
             check_status(DebugPrint(deref(self.ap), 0))
 
-    def __richcmp__(self, other, int op):
-        function_name = _op_to_function_name(op)
-        return _pc().call_function(function_name, [self, other])
-
     def diff(self, Array other):
         """
         Compare contents of this array against another one.
@@ -879,6 +974,12 @@ cdef class Array(_PandasConvertible):
     def __str__(self):
         return self.to_string()
 
+    def __eq__(self, other):
+        try:
+            return self.equals(other)
+        except TypeError:
+            return NotImplemented
+
     def equals(Array self, Array other):
         return self.ap.Equals(deref(other.ap))
 
@@ -902,6 +1003,12 @@ cdef class Array(_PandasConvertible):
         Return BooleanArray indicating the non-null values.
         """
         return _pc().is_valid(self)
+
+    def fill_null(self, fill_value):
+        """
+        See pyarrow.compute.fill_null for usage.
+        """
+        return _pc().fill_null(self, fill_value)
 
     def __getitem__(self, key):
         """
@@ -1035,6 +1142,12 @@ cdef class Array(_PandasConvertible):
         lst : list
         """
         return [x.as_py() for x in self]
+
+    def tolist(self):
+        """
+        Alias of to_pylist for compatibility with NumPy.
+        """
+        return self.to_pylist()
 
     def validate(self, *, full=False):
         """
@@ -1400,7 +1513,7 @@ cdef class BaseListArray(Array):
           1
         ]
         """
-        return _pc().list_value_lengths(self)
+        return _pc().list_value_length(self)
 
 
 cdef class ListArray(BaseListArray):

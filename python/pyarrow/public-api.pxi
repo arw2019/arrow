@@ -249,6 +249,9 @@ cdef api object pyarrow_wrap_scalar(const shared_ptr[CScalar]& sp_scalar):
     if data_type == NULL:
         raise ValueError('Scalar data type was NULL')
 
+    if data_type.id() not in _scalar_classes:
+        raise ValueError('Scalar type not supported')
+
     klass = _scalar_classes[data_type.id()]
 
     cdef Scalar scalar = klass.__new__(klass)
@@ -385,8 +388,6 @@ cdef api shared_ptr[CTable] pyarrow_unwrap_table(object table):
 
 
 cdef api object pyarrow_wrap_table(const shared_ptr[CTable]& ctable):
-    # Ensure that wrapped table is Valid
-    check_status(ctable.get().Validate())
     cdef Table table = Table.__new__(Table)
     table.init(ctable)
     return table

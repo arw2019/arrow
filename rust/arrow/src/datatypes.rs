@@ -348,6 +348,7 @@ impl ArrowNativeType for f64 {
 
 macro_rules! make_type {
     ($name:ident, $native_ty:ty, $data_ty:expr, $bit_width:expr, $default_val:expr) => {
+        #[derive(Debug)]
         pub struct $name {}
 
         impl ArrowPrimitiveType for $name {
@@ -497,6 +498,14 @@ impl ArrowDictionaryKeyType for Int16Type {}
 impl ArrowDictionaryKeyType for Int32Type {}
 
 impl ArrowDictionaryKeyType for Int64Type {}
+
+impl ArrowDictionaryKeyType for UInt8Type {}
+
+impl ArrowDictionaryKeyType for UInt16Type {}
+
+impl ArrowDictionaryKeyType for UInt32Type {}
+
+impl ArrowDictionaryKeyType for UInt64Type {}
 
 /// A subtype of primitive type that represents numeric values.
 ///
@@ -1512,7 +1521,12 @@ impl Schema {
                 return Ok(i);
             }
         }
-        Err(ArrowError::InvalidArgumentError(name.to_owned()))
+        let valid_fields: Vec<String> =
+            self.fields.iter().map(|f| f.name().clone()).collect();
+        Err(ArrowError::InvalidArgumentError(format!(
+            "Unable to get field named \"{}\". Valid fields: {:?}",
+            name, valid_fields
+        )))
     }
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
@@ -2350,26 +2364,31 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "Unable to get field named \\\"nickname\\\". Valid fields: [\\\"first_name\\\", \\\"last_name\\\", \\\"address\\\"]"
+    )]
     fn schema_index_of() {
         let schema = person_schema();
-        assert_eq!(schema.index_of("first_name"), Ok(0));
-        assert_eq!(schema.index_of("last_name"), Ok(1));
-        assert_eq!(
-            schema.index_of("nickname"),
-            Err(ArrowError::InvalidArgumentError("nickname".to_owned()))
-        );
+        assert_eq!(schema.index_of("first_name").unwrap(), 0);
+        assert_eq!(schema.index_of("last_name").unwrap(), 1);
+        schema.index_of("nickname").unwrap();
     }
 
     #[test]
-    fn schema_field_with_name() -> Result<()> {
+    #[should_panic(
+        expected = "Unable to get field named \\\"nickname\\\". Valid fields: [\\\"first_name\\\", \\\"last_name\\\", \\\"address\\\"]"
+    )]
+    fn schema_field_with_name() {
         let schema = person_schema();
-        assert_eq!(schema.field_with_name("first_name")?.name(), "first_name");
-        assert_eq!(schema.field_with_name("last_name")?.name(), "last_name");
         assert_eq!(
-            schema.field_with_name("nickname"),
-            Err(ArrowError::InvalidArgumentError("nickname".to_owned()))
+            schema.field_with_name("first_name").unwrap().name(),
+            "first_name"
         );
-        Ok(())
+        assert_eq!(
+            schema.field_with_name("last_name").unwrap().name(),
+            "last_name"
+        );
+        schema.field_with_name("nickname").unwrap();
     }
 
     #[test]

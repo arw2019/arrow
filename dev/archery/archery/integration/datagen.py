@@ -181,7 +181,7 @@ class IntegerField(PrimitiveField):
 
     def generate_range(self, size, lower, upper, name=None,
                        include_extremes=False):
-        values = np.random.randint(lower, upper, size=size)
+        values = np.random.randint(lower, upper, size=size, dtype=np.int64)
         if include_extremes and size >= 2:
             values[:2] = [lower, upper]
         values = list(map(int if self.bit_width < 64 else str, values))
@@ -1422,6 +1422,26 @@ def generate_dictionary_case():
                           dictionaries=[dict0, dict1, dict2])
 
 
+def generate_dictionary_unsigned_case():
+    dict0 = Dictionary(0, StringField('dictionary0'), size=5, name='DICT0')
+    dict1 = Dictionary(1, StringField('dictionary1'), size=5, name='DICT1')
+    dict2 = Dictionary(2, StringField('dictionary2'), size=5, name='DICT2')
+
+    # TODO: JavaScript does not support uint64 dictionary indices, so disabled
+    # for now
+
+    # dict3 = Dictionary(3, StringField('dictionary3'), size=5, name='DICT3')
+    fields = [
+        DictionaryField('f0', get_field('', 'uint8'), dict0),
+        DictionaryField('f1', get_field('', 'uint16'), dict1),
+        DictionaryField('f2', get_field('', 'uint32'), dict2),
+        # DictionaryField('f3', get_field('', 'uint64'), dict3)
+    ]
+    batch_sizes = [7, 10]
+    return _generate_file("dictionary_unsigned", fields, batch_sizes,
+                          dictionaries=[dict0, dict1, dict2])
+
+
 def generate_nested_dictionary_case():
     dict0 = Dictionary(0, StringField('str'), size=10, name='DICT0')
 
@@ -1528,7 +1548,6 @@ def get_generated_json_files(tempdir=None, flight=False):
 
         generate_unions_case()
         .skip_category('Go')
-        .skip_category('Java')  # TODO(ARROW-1692)
         .skip_category('JS')
         .skip_category('Rust'),
 
@@ -1546,6 +1565,11 @@ def get_generated_json_files(tempdir=None, flight=False):
         generate_dictionary_case()
         .skip_category('Go')
         .skip_category('Rust'),
+
+        generate_dictionary_unsigned_case()
+        .skip_category('Go')     # TODO(ARROW-9378)
+        .skip_category('Java')   # TODO(ARROW-9377)
+        .skip_category('Rust'),  # TODO(ARROW-9379)
 
         generate_nested_dictionary_case()
         .skip_category('Go')

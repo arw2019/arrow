@@ -38,11 +38,6 @@
 #' "Slice" method function even if there were a column in the table called
 #' "Slice".
 #'
-#' A caveat about the `[` method for row operations: only "slicing" is
-#' currently supported. That is, you can select a continuous range of rows
-#' from the table, but you can't filter with a `logical` vector or take an
-#' arbitrary selection of rows by integer indices.
-#'
 #' @section R6 Methods:
 #' In addition to the more R-friendly S3 methods, a `RecordBatch` object has
 #' the following R6 methods that map onto the underlying C++ methods:
@@ -125,6 +120,7 @@ RecordBatch <- R6Class("RecordBatch", inherit = ArrowObject,
       if (is.logical(i)) {
         i <- Array$create(i)
       }
+      assert_that(is.Array(i, "bool"))
       shared_ptr(RecordBatch, call_function("filter", self, i, options = list(keep_na = keep_na)))
     },
     serialize = function() ipc___SerializeRecordBatch__Raw(self),

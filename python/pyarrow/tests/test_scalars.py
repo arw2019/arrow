@@ -47,6 +47,8 @@ import pyarrow as pa
      pa.LargeListValue),
     (datetime.date.today(), None, pa.Date32Scalar, pa.Date32Value),
     (datetime.datetime.now(), None, pa.TimestampScalar, pa.TimestampValue),
+    (datetime.datetime.now().time(), None, pa.Time64Scalar, pa.Time64Value),
+    (datetime.timedelta(days=1), None, pa.DurationScalar, pa.DurationValue),
     ({'a': 1, 'b': [1, 2]}, None, pa.StructScalar, pa.StructValue)
 ])
 def test_basics(value, ty, klass, deprecated):
@@ -177,6 +179,15 @@ def test_time():
         for t in [t1, t2]:
             s = pa.scalar(t, type=ty)
             assert s.as_py() == t
+
+
+def test_cast():
+    val = pa.scalar(5, type='int8')
+    assert val.cast('int64') == pa.scalar(5, type='int64')
+    assert val.cast('uint32') == pa.scalar(5, type='uint32')
+    assert val.cast('string') == pa.scalar('5', type='string')
+    with pytest.raises(ValueError):
+        pa.scalar('foo').cast('int32')
 
 
 @pytest.mark.pandas
@@ -344,7 +355,7 @@ def test_list(ty, klass):
     assert s.type == ty
     assert len(s) == 2
     assert isinstance(s.values, pa.Array)
-    assert s.values == v
+    assert s.values.to_pylist() == v
     assert isinstance(s, klass)
     assert repr(v) in repr(s)
     assert s.as_py() == v
@@ -459,6 +470,15 @@ def test_map():
     assert isinstance(s, pa.MapScalar)
     assert isinstance(s.values, pa.Array)
     assert repr(s) == "<pyarrow.MapScalar: [('a', 1), ('b', 2)]>"
+    assert s.values.to_pylist() == [
+        {'key': 'a', 'value': 1},
+        {'key': 'b', 'value': 2}
+    ]
+
+    # test iteration
+    for i, j in zip(s, v):
+        assert i == j
+
     assert s.as_py() == v
     assert s[1] == (
         pa.scalar('b', type=pa.string()),
@@ -485,7 +505,7 @@ def test_dictionary():
         assert s.as_py() == v
         assert s.value.as_py() == v
         assert s.index.as_py() == i
-        assert s.dictionary == dictionary
+        assert s.dictionary.to_pylist() == dictionary
 
         with pytest.warns(FutureWarning):
             assert s.index_value.as_py() == i

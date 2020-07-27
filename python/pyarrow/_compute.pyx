@@ -174,10 +174,12 @@ num_kernels: {}
     def num_kernels(self):
         return self.base_func.num_kernels()
 
-    def call(self, args, FunctionOptions options=None):
+    def call(self, args, FunctionOptions options=None,
+             MemoryPool memory_pool=None):
         cdef:
             const CFunctionOptions* c_options = NULL
-            CExecContext* c_exec_ctx = NULL
+            CMemoryPool* pool = maybe_unbox_memory_pool(memory_pool)
+            CExecContext c_exec_ctx = CExecContext(pool)
             vector[CDatum] c_args
             CDatum result
 
@@ -189,7 +191,7 @@ num_kernels: {}
         with nogil:
             result = GetResultValue(self.base_func.Execute(c_args,
                                                            c_options,
-                                                           c_exec_ctx))
+                                                           &c_exec_ctx))
 
         return wrap_datum(result)
 
@@ -260,7 +262,8 @@ cdef _pack_compute_args(object values, vector[CDatum]* out):
         elif isinstance(val, Table):
             out.push_back(CDatum((<Table> val).sp_table))
         else:
-            raise TypeError(type(val))
+            raise TypeError("Got unexpected argument type {} "
+                            "for compute function".format(type(val)))
 
 
 cdef class FunctionRegistry:
@@ -290,9 +293,9 @@ def function_registry():
     return _global_func_registry
 
 
-def call_function(name, args, options=None):
+def call_function(name, args, options=None, memory_pool=None):
     func = _global_func_registry.get_function(name)
-    return func.call(args, options=options)
+    return func.call(args, options=options, memory_pool=memory_pool)
 
 
 cdef class FunctionOptions:
@@ -399,16 +402,16 @@ cdef class CastOptions(FunctionOptions):
         self.options.allow_invalid_utf8 = flag
 
 
-cdef class BinaryContainsExactOptions(FunctionOptions):
+cdef class MatchSubstringOptions(FunctionOptions):
     cdef:
-        unique_ptr[CBinaryContainsExactOptions] binary_contains_exact_options
+        unique_ptr[CMatchSubstringOptions] match_substring_options
 
     def __init__(self, pattern):
-        self.binary_contains_exact_options.reset(
-            new CBinaryContainsExactOptions(tobytes(pattern)))
+        self.match_substring_options.reset(
+            new CMatchSubstringOptions(tobytes(pattern)))
 
     cdef const CFunctionOptions* get_options(self) except NULL:
-        return self.binary_contains_exact_options.get()
+        return self.match_substring_options.get()
 
 
 cdef class FilterOptions(FunctionOptions):

@@ -363,11 +363,27 @@ if(ARROW_COMPUTE)
               compute/kernels/scalar_set_lookup.cc
               compute/kernels/scalar_string.cc
               compute/kernels/scalar_validity.cc
+              compute/kernels/scalar_fill_null.cc
               compute/kernels/util_internal.cc
               compute/kernels/vector_hash.cc
               compute/kernels/vector_nested.cc
               compute/kernels/vector_selection.cc
               compute/kernels/vector_sort.cc)
+
+  if(CXX_SUPPORTS_AVX2)
+    list(APPEND ARROW_SRCS compute/kernels/aggregate_sum_avx2.cc)
+    set_source_files_properties(compute/kernels/aggregate_sum_avx2.cc PROPERTIES
+                                SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(compute/kernels/aggregate_sum_avx2.cc PROPERTIES
+                                COMPILE_FLAGS ${ARROW_AVX2_FLAG})
+  endif()
+  if(CXX_SUPPORTS_AVX512)
+    list(APPEND ARROW_SRCS compute/kernels/aggregate_sum_avx512.cc)
+    set_source_files_properties(compute/kernels/aggregate_sum_avx512.cc PROPERTIES
+                                SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(compute/kernels/aggregate_sum_avx512.cc PROPERTIES
+                                COMPILE_FLAGS ${ARROW_AVX512_FLAG})
+  endif()
 endif()
 
 if(ARROW_FILESYSTEM)
@@ -483,6 +499,18 @@ if(ARROW_WITH_BACKTRACE)
       target_compile_definitions(${LIB_TARGET} PRIVATE ARROW_WITH_BACKTRACE)
     endif()
   endforeach()
+endif()
+
+if(ARROW_BUILD_STATIC AND ARROW_BUNDLED_STATIC_LIBS)
+  arrow_car(_FIRST_LIB ${ARROW_BUNDLED_STATIC_LIBS})
+  arrow_cdr(_OTHER_LIBS ${ARROW_BUNDLED_STATIC_LIBS})
+  create_merged_static_lib(arrow_bundled_dependencies
+                           NAME
+                           arrow_bundled_dependencies
+                           ROOT
+                           ${_FIRST_LIB}
+                           TO_MERGE
+                           ${_OTHER_LIBS})
 endif()
 
 if(ARROW_BUILD_TESTS

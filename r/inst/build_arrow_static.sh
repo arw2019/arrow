@@ -58,7 +58,7 @@ ${CMAKE} -DARROW_BOOST_USE_SHARED=OFF \
     -DARROW_COMPUTE=ON \
     -DARROW_CSV=ON \
     -DARROW_DATASET=ON \
-    -DARROW_DEPENDENCY_SOURCE=${ARROW_DEPENDENCY_SOURCE:-AUTO} \
+    -DARROW_DEPENDENCY_SOURCE=BUNDLED \
     -DARROW_FILESYSTEM=ON \
     -DARROW_JEMALLOC=${ARROW_JEMALLOC:-ON} \
     -DARROW_JSON=ON \
@@ -81,31 +81,4 @@ ${CMAKE} -DARROW_BOOST_USE_SHARED=OFF \
     -G ${CMAKE_GENERATOR:-"Unix Makefiles"} \
     ${SOURCE_DIR}
 ${CMAKE} --build . --target install
-
-if [ $? -ne 0 ]; then
-  if [ "${DEBUG_DIR}" != "" ]; then
-    # For debugging installation problems, copy the build contents somewhere not tmp
-    mkdir -p ${DEBUG_DIR}
-    cp -r ./* ${DEBUG_DIR}
-    echo "**** Error building Arrow C++. See ${DEBUG_DIR} for details."
-  else
-    # Emit a clear message that the C++ build failed
-    echo "**** Error building Arrow C++. Re-run with ARROW_R_DEV=true for debug information."
-  fi
-fi
-
-if [ -d "${DEST_DIR}/lib" ]; then
-  # If the build failed and the CMAKE_INSTALL_LIBDIR doesn't exist, don't try
-  # to do this stuff because the errors will be misleading
-
-  # Copy the bundled static libs from the build to the install dir
-  # See https://issues.apache.org/jira/browse/ARROW-7499 for moving this to CMake
-  find . -regex .*/.*/lib/.*\\.a\$ | xargs -I{} cp -u {} ${DEST_DIR}/lib
-  # jemalloc makes both libjemalloc.a and libjemalloc_pic.a; we can't use the former, only the latter
-  rm ${DEST_DIR}/lib/libjemalloc.a || true
-  # -lbrotlicommon-static needs to come after the other brotli libs, so rename it so alpha sort works
-  if [ -f "${DEST_DIR}/lib/libbrotlicommon-static.a" ]; then
-    mv "${DEST_DIR}/lib/libbrotlicommon-static.a" "${DEST_DIR}/lib/libbrotlizzz-static.a"
-  fi
-fi
 popd

@@ -95,6 +95,8 @@ Array <- R6Class("Array",
         shared_ptr(ListArray, self$pointer())
       } else if (type_id == Type$LARGE_LIST){
         shared_ptr(LargeListArray, self$pointer())
+      } else if (type_id == Type$FIXED_SIZE_LIST){
+        shared_ptr(FixedSizeListArray, self$pointer())
       } else {
         self
       }
@@ -248,17 +250,27 @@ LargeListArray <- R6Class("LargeListArray", inherit = Array,
   )
 )
 
+#' @rdname array
+#' @usage NULL
+#' @format NULL
+#' @export
+FixedSizeListArray <- R6Class("FixedSizeListArray", inherit = Array,
+  public = list(
+    values = function() Array$create(FixedSizeListArray__values(self)),
+    value_length = function(i) FixedSizeListArray__value_length(self, i),
+    value_offset = function(i) FixedSizeListArray__value_offset(self, i)
+  ),
+  active = list(
+    value_type = function() DataType$create(FixedSizeListArray__value_type(self)),
+    list_size = function() self$type$list_size
+  )
+)
+
 #' @export
 length.Array <- function(x) x$length()
 
 #' @export
-is.na.Array <- function(x) {
-  if (x$type == null()) {
-    rep(TRUE, length(x))
-  } else {
-    !Array__Mask(x)
-  }
-}
+is.na.Array <- function(x) shared_ptr(Array, call_function("is_null", x))
 
 #' @export
 as.vector.Array <- function(x, mode) x$as_vector()
@@ -269,7 +281,7 @@ filter_rows <- function(x, i, keep_na = TRUE, ...) {
   nrows <- x$num_rows %||% x$length() # Depends on whether Array or Table-like
   if (inherits(i, "array_expression")) {
     # Evaluate it
-    i <- as.vector(i)
+    i <- eval_array_expression(i)
   }
   if (is.logical(i)) {
     if (isTRUE(i)) {

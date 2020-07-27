@@ -471,6 +471,16 @@ def test_expression_construction():
         field != {1}
 
 
+def test_partition_keys():
+    a, b, c = [ds.field(f) == f for f in 'abc']
+    assert ds._get_partition_keys(a) == {'a': 'a'}
+    assert ds._get_partition_keys(a & b & c) == {f: f for f in 'abc'}
+
+    nope = ds.field('d') >= 3
+    assert ds._get_partition_keys(nope) == {}
+    assert ds._get_partition_keys(a & nope) == {'a': 'a'}
+
+
 def test_parquet_read_options():
     opts1 = ds.ParquetReadOptions()
     opts2 = ds.ParquetReadOptions(buffer_size=4096,
@@ -667,7 +677,7 @@ def test_make_parquet_fragment_from_buffer():
         assert pickled.to_table().equals(table)
 
 
-def _create_dataset_for_fragments(tempdir, chunk_size=None):
+def _create_dataset_for_fragments(tempdir, chunk_size=None, filesystem=None):
     import pyarrow.parquet as pq
 
     table = pa.table(
@@ -680,8 +690,11 @@ def _create_dataset_for_fragments(tempdir, chunk_size=None):
     # write_to_dataset currently requires pandas
     pq.write_to_dataset(table, path,
                         partition_cols=["part"], chunk_size=chunk_size)
+    dataset = ds.dataset(
+        path, format="parquet", partitioning="hive", filesystem=filesystem
+    )
 
-    return table, ds.dataset(path, format="parquet", partitioning="hive")
+    return table, dataset
 
 
 @pytest.mark.pandas
@@ -745,8 +758,8 @@ def test_fragments_reconstruct(tempdir):
         column_names = columns if columns else table.column_names
         assert actual.column_names == column_names
 
-        expected = table.slice(*row_slice).to_pandas()[[*column_names]]
-        assert actual.equals(pa.Table.from_pandas(expected))
+        expected = table.slice(*row_slice).select(column_names)
+        assert actual.equals(expected)
 
     fragment = list(dataset.get_fragments())[0]
     parquet_format = fragment.format
@@ -821,6 +834,168 @@ def test_fragments_parquet_row_groups(tempdir):
 
 @pytest.mark.pandas
 @pytest.mark.parquet
+def test_fragments_parquet_ensure_metadata(tempdir, open_logging_fs):
+    fs, assert_opens = open_logging_fs
+    _, dataset = _create_dataset_for_fragments(
+        tempdir, chunk_size=2, filesystem=fs
+    )
+    fragment = list(dataset.get_fragments())[0]
+
+    # with default discovery, no metadata loaded
+    assert fragment.row_groups is None
+    with assert_opens([fragment.path]):
+        fragment.ensure_complete_metadata()
+    assert fragment.row_groups is not None
+
+    # second time -> use cached / no file IO
+    with assert_opens([]):
+        fragment.ensure_complete_metadata()
+
+    # recreate fragment with row group ids
+    new_fragment = fragment.format.make_fragment(
+        fragment.path, fragment.filesystem, row_groups=[0, 1]
+    )
+    assert new_fragment.row_groups is not None
+    assert len(new_fragment.row_groups) == 2
+    row_group = new_fragment.row_groups[0]
+    assert row_group.id == 0
+    # no initialized statistics
+    assert row_group.num_rows == -1
+    assert row_group.statistics is None
+
+    # collect metadata
+    new_fragment.ensure_complete_metadata()
+    row_group = new_fragment.row_groups[0]
+    assert row_group.id == 0
+    assert row_group.num_rows == 2
+    assert row_group.statistics is not None
+
+    # pickling preserves row group ids but not statistics
+    pickled_fragment = pickle.loads(pickle.dumps(new_fragment))
+    assert pickled_fragment.row_groups is not None
+    row_group = pickled_fragment.row_groups[0]
+    assert row_group.id == 0
+    assert row_group.num_rows == -1
+    assert row_group.statistics is None
+
+
+def _create_dataset_all_types(tempdir, chunk_size=None):
+    import pyarrow.parquet as pq
+
+    table = pa.table(
+        [
+            pa.array([True, None, False], pa.bool_()),
+            pa.array([1, 10, 42], pa.int8()),
+            pa.array([1, 10, 42], pa.uint8()),
+            pa.array([1, 10, 42], pa.int16()),
+            pa.array([1, 10, 42], pa.uint16()),
+            pa.array([1, 10, 42], pa.int32()),
+            pa.array([1, 10, 42], pa.uint32()),
+            pa.array([1, 10, 42], pa.int64()),
+            pa.array([1, 10, 42], pa.uint64()),
+            pa.array([1.0, 10.0, 42.0], pa.float32()),
+            pa.array([1.0, 10.0, 42.0], pa.float64()),
+            pa.array(['a', None, 'z'], pa.utf8()),
+            pa.array(['a', None, 'z'], pa.binary()),
+            pa.array([1, 10, 42], pa.timestamp('s')),
+            pa.array([1, 10, 42], pa.timestamp('ms')),
+            pa.array([1, 10, 42], pa.timestamp('us')),
+            pa.array([1, 10, 42], pa.date32()),
+            pa.array([1, 10, 4200000000], pa.date64()),
+            pa.array([1, 10, 42], pa.time32('s')),
+            pa.array([1, 10, 42], pa.time64('us')),
+        ],
+        names=[
+            'boolean',
+            'int8',
+            'uint8',
+            'int16',
+            'uint16',
+            'int32',
+            'uint32',
+            'int64',
+            'uint64',
+            'float',
+            'double',
+            'utf8',
+            'binary',
+            'ts[s]',
+            'ts[ms]',
+            'ts[us]',
+            'date32',
+            'date64',
+            'time32',
+            'time64',
+        ]
+    )
+
+    path = str(tempdir / "test_parquet_dataset_all_types")
+
+    # write_to_dataset currently requires pandas
+    pq.write_to_dataset(table, path, chunk_size=chunk_size)
+
+    return table, ds.dataset(path, format="parquet", partitioning="hive")
+
+
+@pytest.mark.pandas
+@pytest.mark.parquet
+def test_parquet_fragment_statistics(tempdir):
+    table, dataset = _create_dataset_all_types(tempdir)
+
+    fragment = list(dataset.get_fragments())[0]
+
+    import datetime
+    def dt_s(x): return datetime.datetime(1970, 1, 1, 0, 0, x)
+    def dt_ms(x): return datetime.datetime(1970, 1, 1, 0, 0, 0, x*1000)
+    def dt_us(x): return datetime.datetime(1970, 1, 1, 0, 0, 0, x)
+    date = datetime.date
+    time = datetime.time
+
+    # list and scan row group fragments
+    row_group_fragments = list(fragment.split_by_row_group())
+    assert row_group_fragments[0].row_groups is not None
+    row_group = row_group_fragments[0].row_groups[0]
+    assert row_group.num_rows == 3
+    assert row_group.total_byte_size > 1000
+    assert row_group.statistics == {
+        'boolean': {'min': False, 'max': True},
+        'int8': {'min': 1, 'max': 42},
+        'uint8': {'min': 1, 'max': 42},
+        'int16': {'min': 1, 'max': 42},
+        'uint16': {'min': 1, 'max': 42},
+        'int32': {'min': 1, 'max': 42},
+        'uint32': {'min': 1, 'max': 42},
+        'int64': {'min': 1, 'max': 42},
+        'uint64': {'min': 1, 'max': 42},
+        'float': {'min': 1.0, 'max': 42.0},
+        'double': {'min': 1.0, 'max': 42.0},
+        'utf8': {'min': 'a', 'max': 'z'},
+        'binary': {'min': b'a', 'max': b'z'},
+        'ts[s]': {'min': dt_s(1), 'max': dt_s(42)},
+        'ts[ms]': {'min': dt_ms(1), 'max': dt_ms(42)},
+        'ts[us]': {'min': dt_us(1), 'max': dt_us(42)},
+        'date32': {'min': date(1970, 1, 2), 'max': date(1970, 2, 12)},
+        'date64': {'min': date(1970, 1, 1), 'max': date(1970, 2, 18)},
+        'time32': {'min': time(0, 0, 1), 'max': time(0, 0, 42)},
+        'time64': {'min': time(0, 0, 0, 1), 'max': time(0, 0, 0, 42)},
+    }
+
+
+@pytest.mark.parquet
+def test_parquet_fragment_statistics_nulls(tempdir):
+    import pyarrow.parquet as pq
+
+    table = pa.table({'a': [0, 1, None, None], 'b': ['a', 'b', None, None]})
+    pq.write_table(table, tempdir / "test.parquet", row_group_size=2)
+
+    dataset = ds.dataset(tempdir / "test.parquet", format="parquet")
+    fragments = list(dataset.get_fragments())[0].split_by_row_group()
+    # second row group has all nulls -> no statistics
+    assert fragments[1].row_groups[0].statistics == {}
+
+
+@pytest.mark.pandas
+@pytest.mark.parquet
 def test_fragments_parquet_row_groups_predicate(tempdir):
     table, dataset = _create_dataset_for_fragments(tempdir, chunk_size=2)
 
@@ -832,13 +1007,13 @@ def test_fragments_parquet_row_groups_predicate(tempdir):
 
     # filter matches partition_expression: all row groups
     row_group_fragments = list(
-        fragment.split_by_row_group(ds.field('part') == 'a',
+        fragment.split_by_row_group(filter=ds.field('part') == 'a',
                                     schema=dataset.schema))
     assert len(row_group_fragments) == 2
 
     # filter contradicts partition_expression: no row groups
     row_group_fragments = list(
-        fragment.split_by_row_group(ds.field('part') == 'b',
+        fragment.split_by_row_group(filter=ds.field('part') == 'b',
                                     schema=dataset.schema))
     assert len(row_group_fragments) == 0
 
@@ -941,6 +1116,12 @@ def test_partitioning_factory_dictionary(mockfs):
         table = factory.finish().to_table().combine_chunks()
         actual = table.column('key').chunk(0)
         expected = pa.array(['xxx'] * 5 + ['yyy'] * 5).dictionary_encode()
+        assert actual.equals(expected)
+
+        # ARROW-9345 ensure filtering on the partition field works
+        table = factory.finish().to_table(filter=ds.field('key') == 'xxx')
+        actual = table.column('key').chunk(0)
+        expected = expected.slice(0, 5)
         assert actual.equals(expected)
 
 
@@ -1303,6 +1484,50 @@ def test_open_dataset_non_existing_file():
         ds.dataset('file:i-am-not-existing.parquet', format='parquet')
 
 
+@pytest.mark.parquet
+@pytest.mark.parametrize('partitioning', ["directory", "hive"])
+@pytest.mark.parametrize('partition_keys', [
+    (["A", "B", "C"], [1, 2, 3]),
+    ([1, 2, 3], ["A", "B", "C"]),
+    (["A", "B", "C"], ["D", "E", "F"]),
+    ([1, 2, 3], [4, 5, 6]),
+])
+def test_open_dataset_partitioned_dictionary_type(tempdir, partitioning,
+                                                  partition_keys):
+    # ARROW-9288 / ARROW-9476
+    import pyarrow.parquet as pq
+    table = pa.table({'a': range(9), 'b': [0.] * 4 + [1.] * 5})
+
+    basepath = tempdir / "dataset"
+    basepath.mkdir()
+
+    part_keys1, part_keys2 = partition_keys
+    for part1 in part_keys1:
+        for part2 in part_keys2:
+            if partitioning == 'directory':
+                fmt = "{0}/{1}"
+            else:
+                fmt = "part1={0}/part2={1}"
+            path = basepath / fmt.format(part1, part2)
+            path.mkdir(parents=True)
+            pq.write_table(table, path / "test.parquet")
+
+    if partitioning == "directory":
+        part = ds.DirectoryPartitioning.discover(
+            ["part1", "part2"], max_partition_dictionary_size=None)
+    else:
+        part = ds.HivePartitioning.discover(max_partition_dictionary_size=None)
+
+    dataset = ds.dataset(str(basepath), partitioning=part)
+
+    dict_type = pa.dictionary(pa.int32(), pa.string())
+    part_type1 = dict_type if isinstance(part_keys1[0], str) else pa.int32()
+    part_type2 = dict_type if isinstance(part_keys2[0], str) else pa.int32()
+    expected_schema = table.schema.append(
+        pa.field("part1", part_type1)).append(pa.field("part2", part_type2))
+    assert dataset.schema.equals(expected_schema)
+
+
 @pytest.fixture
 def s3_example_simple(s3_connection, s3_server):
     from pyarrow.fs import FileSystem
@@ -1354,8 +1579,13 @@ def test_open_dataset_from_uri_s3_fsspec(s3_example_simple):
             'endpoint_url': 'http://{}:{}'.format(host, port)
         }
     )
-    fs = PyFileSystem(FSSpecHandler(fs))
 
+    # passing as fsspec filesystem
+    dataset = ds.dataset(path, format="parquet", filesystem=fs)
+    assert dataset.to_table().equals(table)
+
+    # directly passing the fsspec-handler
+    fs = PyFileSystem(FSSpecHandler(fs))
     dataset = ds.dataset(path, format="parquet", filesystem=fs)
     assert dataset.to_table().equals(table)
 
@@ -1426,6 +1656,17 @@ def test_open_dataset_from_s3_with_filesystem_uri(s3_connection, s3_server):
     with pytest.raises(ValueError) as exc:
         ds.dataset('data.parquet', filesystem=uri)
     assert str(exc.value) == error.format('File', path, uri)
+
+
+@pytest.mark.parquet
+def test_open_dataset_from_fsspec(tempdir):
+    table, path = _create_single_file(tempdir)
+
+    fsspec = pytest.importorskip("fsspec")
+
+    localfs = fsspec.filesystem("file")
+    dataset = ds.dataset(path, filesystem=localfs)
+    assert dataset.schema.equals(table.schema)
 
 
 @pytest.mark.parquet
@@ -1750,6 +1991,7 @@ def _create_parquet_dataset_partitioned(root_path):
         pa.array(np.repeat(['a', 'b'], 10))],
         names=["f1", "f2", "part"]
     )
+    table = table.replace_schema_metadata({"key": "value"})
     pq.write_to_dataset(table, str(root_path), partition_cols=['part'])
     return _create_metadata_file(root_path), table
 
@@ -1772,6 +2014,21 @@ def test_parquet_dataset_factory_partitioned(tempdir):
     result = result.to_pandas().sort_values("f1").reset_index(drop=True)
     expected = table.to_pandas()
     pd.testing.assert_frame_equal(result, expected)
+
+
+@pytest.mark.parquet
+@pytest.mark.pandas
+def test_parquet_dataset_factory_metadata(tempdir):
+    # ensure ParquetDatasetFactory preserves metadata (ARROW-9363)
+    root_path = tempdir / "test_parquet_dataset_factory_metadata"
+    metadata_path, table = _create_parquet_dataset_partitioned(root_path)
+
+    dataset = ds.parquet_dataset(metadata_path, partitioning="hive")
+    assert dataset.schema.equals(table.schema)
+    assert b"key" in dataset.schema.metadata
+
+    fragments = list(dataset.get_fragments())
+    assert b"key" in fragments[0].physical_schema.metadata
 
 
 @pytest.mark.parquet
@@ -1848,3 +2105,21 @@ def test_filter_mismatching_schema(tempdir):
     fragment = list(dataset.get_fragments())[0]
     with pytest.raises(TypeError):
         fragment.to_table(filter=ds.field("col") > 2, schema=schema)
+
+
+@pytest.mark.parquet
+@pytest.mark.pandas
+def test_dataset_project_only_partition_columns(tempdir):
+    # ARROW-8729
+    import pyarrow.parquet as pq
+
+    table = pa.table({'part': 'a a b b'.split(), 'col': list(range(4))})
+
+    path = str(tempdir / 'test_dataset')
+    pq.write_to_dataset(table, path, partition_cols=['part'])
+    dataset = ds.dataset(path, partitioning='hive')
+
+    all_cols = dataset.to_table(use_threads=False)
+    part_only = dataset.to_table(columns=['part'], use_threads=False)
+
+    assert all_cols.column('part').equals(part_only.column('part'))

@@ -63,6 +63,32 @@ def __getattr__(name):
     )
 
 
+def _ensure_filesystem(filesystem, use_mmap=False):
+    if isinstance(filesystem, FileSystem):
+        return filesystem
+
+    # handle fsspec-compatible filesystems
+    try:
+        import fsspec
+    except ImportError:
+        pass
+    else:
+        if isinstance(filesystem, fsspec.AbstractFileSystem):
+            if type(filesystem).__name__ == 'LocalFileSystem':
+                # In case its a simple LocalFileSystem, use native arrow one
+                return LocalFileSystem(use_mmap=use_mmap)
+            return PyFileSystem(FSSpecHandler(filesystem))
+
+    # map old filesystems to new ones
+    from pyarrow.filesystem import LocalFileSystem as LegacyLocalFileSystem
+
+    if isinstance(filesystem, LegacyLocalFileSystem):
+        return LocalFileSystem(use_mmap=use_mmap)
+    # TODO handle HDFS?
+
+    raise TypeError("Unrecognized filesystem: {}".format(type(filesystem)))
+
+
 class FSSpecHandler(FileSystemHandler):
     """
     Handler for fsspec-based Python filesystems.
@@ -170,7 +196,7 @@ class FSSpecHandler(FileSystemHandler):
         self.fs.rm(path)
 
     def move(self, src, dest):
-        self.fs.mv(src, dest)
+        self.fs.mv(src, dest, recursive=True)
 
     def copy_file(self, src, dest):
         # fs.copy correctly raises IsADirectoryError when `src` is a directory

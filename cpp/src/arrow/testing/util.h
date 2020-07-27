@@ -176,9 +176,16 @@ UnionTypeFactories() {
   return {sparse_union, dense_union};
 }
 
+// Return the value of the ARROW_TEST_DATA environment variable or return error
+// Status
+ARROW_TESTING_EXPORT Status GetTestResourceRoot(std::string*);
+
 // Get a TCP port number to listen on.  This is a different number every time,
 // as reusing the same port across tests can produce spurious bind errors on
 // Windows.
 ARROW_TESTING_EXPORT int GetListenPort();
+
+ARROW_TESTING_EXPORT
+const std::vector<std::shared_ptr<DataType>>& all_dictionary_index_types();
 
 }  // namespace arrow

@@ -124,6 +124,17 @@ Status KeyValuePartitioning::VisitKeys(
                  checked_cast<const ScalarExpression*>(rhs)->value());
 }
 
+Result<std::unordered_map<std::string, std::shared_ptr<Scalar>>>
+KeyValuePartitioning::GetKeys(const Expression& expr) {
+  std::unordered_map<std::string, std::shared_ptr<Scalar>> keys;
+  RETURN_NOT_OK(
+      VisitKeys(expr, [&](const std::string& name, const std::shared_ptr<Scalar>& value) {
+        keys.emplace(name, value);
+        return Status::OK();
+      }));
+  return keys;
+}
+
 Status KeyValuePartitioning::SetDefaultValuesFromKeys(const Expression& expr,
                                                       RecordBatchProjector* projector) {
   return KeyValuePartitioning::VisitKeys(
@@ -167,7 +178,7 @@ Result<std::shared_ptr<Expression>> KeyValuePartitioning::ConvertKey(
 
     // look up the partition value in the dictionary
     ARROW_ASSIGN_OR_RAISE(converted, Scalar::Parse(value.dictionary->type(), key.value));
-    ARROW_ASSIGN_OR_RAISE(auto index, compute::Match(converted, value.dictionary));
+    ARROW_ASSIGN_OR_RAISE(auto index, compute::IndexIn(converted, value.dictionary));
     value.index = index.scalar();
     if (!value.index->is_valid) {
       return Status::Invalid("Dictionary supplied for field ", field->ToString(),
@@ -304,6 +315,15 @@ class KeyValuePartitioningInspectImpl {
     }
 
     return ::arrow::schema(std::move(fields));
+  }
+
+  std::vector<std::string> FieldNames() {
+    std::vector<std::string> names(name_to_index_.size());
+
+    for (auto kv : name_to_index_) {
+      names[kv.second] = kv.first;
+    }
+    return names;
   }
 
  private:
@@ -646,15 +666,29 @@ class HivePartitioningFactory : public PartitioningFactory {
       }
     }
 
+    field_names_ = impl.FieldNames();
     return impl.Finish(&dictionaries_);
   }
 
   Result<std::shared_ptr<Partitioning>> Finish(
       const std::shared_ptr<Schema>& schema) const override {
-    return std::shared_ptr<Partitioning>(new HivePartitioning(schema, dictionaries_));
+    if (dictionaries_.empty()) {
+      return std::make_shared<HivePartitioning>(schema, dictionaries_);
+    } else {
+      for (FieldRef ref : field_names_) {
+        // ensure all of field_names_ are present in schema
+        RETURN_NOT_OK(ref.FindOne(*schema).status());
+      }
+
+      // drop fields which aren't in field_names_
+      auto out_schema = SchemaFromColumnNames(schema, field_names_);
+
+      return std::make_shared<HivePartitioning>(std::move(out_schema), dictionaries_);
+    }
   }
 
  private:
+  std::vector<std::string> field_names_;
   ArrayVector dictionaries_;
   PartitioningFactoryOptions options_;
 };

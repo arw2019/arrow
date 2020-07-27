@@ -223,6 +223,7 @@ cdef extern from "arrow/dataset/api.h" namespace "arrow::dataset" nogil:
         CRowGroupInfo(int id)
         int id() const
         int64_t num_rows() const
+        int64_t total_byte_size() const
         bint Equals(const CRowGroupInfo& other)
         c_bool HasStatistics() const
         shared_ptr[CStructScalar] statistics() const
@@ -235,6 +236,7 @@ cdef extern from "arrow/dataset/api.h" namespace "arrow::dataset" nogil:
         const vector[CRowGroupInfo]& row_groups() const
         CResult[vector[shared_ptr[CFragment]]] SplitByRowGroup(
             shared_ptr[CExpression] predicate)
+        CStatus EnsureCompleteMetadata()
 
     cdef cppclass CFileSystemDataset \
             "arrow::dataset::FileSystemDataset"(CDataset):
@@ -313,6 +315,10 @@ cdef extern from "arrow/dataset/api.h" namespace "arrow::dataset" nogil:
         "arrow::dataset::KeyValuePartitioning::SetDefaultValuesFromKeys"(
             const CExpression& partition_expression,
             CRecordBatchProjector* projector)
+
+    cdef CResult[unordered_map[c_string, shared_ptr[CScalar]]] \
+        CGetPartitionKeys "arrow::dataset::KeyValuePartitioning::GetKeys"(
+        const CExpression& partition_expression)
 
     cdef cppclass CFileSystemFactoryOptions \
             "arrow::dataset::FileSystemFactoryOptions":

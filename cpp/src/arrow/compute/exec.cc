@@ -498,13 +498,6 @@ class FunctionExecutorImpl : public FunctionExecutor {
 
     if (validity_preallocated_) {
       ARROW_ASSIGN_OR_RAISE(out->buffers[0], kernel_ctx_.AllocateBitmap(length));
-#ifdef ARROW_VALGRIND
-      // ARROW-8976: When writing kernel results chunkwise into larger
-      // preallocations, if the exec_chunksize is not a multiple of 8, then
-      // functions in NullPropagator will access bits that have not yet been
-      // intialized, triggering benign valgrind warnings.
-      internal::ZeroMemory(out->buffers[0].get());
-#endif
     }
     if (data_preallocated_) {
       const auto& fw_type = checked_cast<const FixedWidthType&>(*out->type);
@@ -591,18 +584,22 @@ class ScalarExecutor : public FunctionExecutorImpl<ScalarFunction> {
     Datum out;
     RETURN_NOT_OK(PrepareNextOutput(batch, &out));
 
-    if (kernel_->null_handling == NullHandling::INTERSECTION) {
-      if (output_descr_.shape == ValueDescr::ARRAY) {
-        RETURN_NOT_OK(PropagateNulls(&kernel_ctx_, batch, out.mutable_array()));
-      } else {
+    if (output_descr_.shape == ValueDescr::ARRAY) {
+      ArrayData* out_arr = out.mutable_array();
+      if (kernel_->null_handling == NullHandling::INTERSECTION) {
+        RETURN_NOT_OK(PropagateNulls(&kernel_ctx_, batch, out_arr));
+      } else if (kernel_->null_handling == NullHandling::OUTPUT_NOT_NULL) {
+        out_arr->null_count = 0;
+      }
+    } else {
+      if (kernel_->null_handling == NullHandling::INTERSECTION) {
         // set scalar validity
         out.scalar()->is_valid =
             std::all_of(batch.values.begin(), batch.values.end(),
                         [](const Datum& input) { return input.scalar()->is_valid; });
+      } else if (kernel_->null_handling == NullHandling::OUTPUT_NOT_NULL) {
+        out.scalar()->is_valid = true;
       }
-    } else if (kernel_->null_handling == NullHandling::OUTPUT_NOT_NULL &&
-               output_descr_.shape == ValueDescr::SCALAR) {
-      out.scalar()->is_valid = true;
     }
 
     kernel_->exec(&kernel_ctx_, batch, &out);

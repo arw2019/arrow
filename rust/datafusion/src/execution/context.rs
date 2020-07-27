@@ -17,7 +17,7 @@
 
 //! ExecutionContext contains methods for registering data sources and executing queries
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::string::String;
@@ -36,8 +36,7 @@ use crate::execution::physical_plan::common;
 use crate::execution::physical_plan::csv::{CsvExec, CsvReadOptions};
 use crate::execution::physical_plan::datasource::DatasourceExec;
 use crate::execution::physical_plan::expressions::{
-    Alias, Avg, BinaryExpr, CastExpr, Column, Count, Literal, Max, Min, PhysicalSortExpr,
-    Sum,
+    Avg, BinaryExpr, CastExpr, Column, Count, Literal, Max, Min, PhysicalSortExpr, Sum,
 };
 use crate::execution::physical_plan::hash_aggregate::HashAggregateExec;
 use crate::execution::physical_plan::limit::LimitExec;
@@ -51,10 +50,11 @@ use crate::execution::physical_plan::sort::{SortExec, SortOptions};
 use crate::execution::physical_plan::udf::{ScalarFunction, ScalarFunctionExpr};
 use crate::execution::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
 use crate::execution::table_impl::TableImpl;
-use crate::logicalplan::*;
+use crate::logicalplan::{
+    Expr, FunctionMeta, FunctionType, LogicalPlan, LogicalPlanBuilder,
+};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
-use crate::optimizer::resolve_columns::ResolveColumnsRule;
 use crate::optimizer::type_coercion::TypeCoercionRule;
 use crate::sql::parser::{DFASTNode, DFParser, FileType};
 use crate::sql::planner::{SchemaProvider, SqlToRel};
@@ -63,8 +63,17 @@ use sqlparser::sqlast::{SQLColumnDef, SQLType};
 
 /// Execution context for registering data sources and executing queries
 pub struct ExecutionContext {
-    datasources: HashMap<String, Box<dyn TableProvider>>,
+    datasources: HashMap<String, Box<dyn TableProvider + Send + Sync>>,
     scalar_functions: HashMap<String, Box<ScalarFunction>>,
+}
+
+fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
+    match value {
+        (Ok(e), Ok(e1)) => Ok((e, e1)),
+        (Err(e), Ok(_)) => Err(e),
+        (Ok(_), Err(e1)) => Err(e1),
+        (Err(e), Err(_)) => Err(e),
+    }
 }
 
 impl ExecutionContext {
@@ -236,7 +245,11 @@ impl ExecutionContext {
     }
 
     /// Register a table so that it can be queried from SQL
-    pub fn register_table(&mut self, name: &str, provider: Box<dyn TableProvider>) {
+    pub fn register_table(
+        &mut self,
+        name: &str,
+        provider: Box<dyn TableProvider + Send + Sync>,
+    ) {
         self.datasources.insert(name.to_string(), provider);
     }
 
@@ -263,10 +276,14 @@ impl ExecutionContext {
         }
     }
 
+    /// The set of available tables. Use `table` to get a specific table.
+    pub fn tables(&self) -> HashSet<String> {
+        self.datasources.keys().cloned().collect()
+    }
+
     /// Optimize the logical plan by applying optimizer rules
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rules: Vec<Box<dyn OptimizerRule>> = vec![
-            Box::new(ResolveColumnsRule::new()),
             Box::new(ProjectionPushDown::new()),
             Box::new(TypeCoercionRule::new(&self.scalar_functions)),
         ];
@@ -347,7 +364,12 @@ impl ExecutionContext {
                 let input_schema = input.as_ref().schema().clone();
                 let runtime_expr = expr
                     .iter()
-                    .map(|e| self.create_physical_expr(e, &input_schema))
+                    .map(|e| {
+                        tuple_err((
+                            self.create_physical_expr(e, &input_schema),
+                            e.name(&input_schema),
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Arc::new(ProjectionExec::try_new(runtime_expr, input)?))
             }
@@ -361,17 +383,30 @@ impl ExecutionContext {
                 let input = self.create_physical_plan(input, batch_size)?;
                 let input_schema = input.as_ref().schema().clone();
 
-                let group_expr = group_expr
+                let groups = group_expr
                     .iter()
-                    .map(|e| self.create_physical_expr(e, &input_schema))
+                    .map(|e| {
+                        tuple_err((
+                            self.create_physical_expr(e, &input_schema),
+                            e.name(&input_schema),
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let aggr_expr = aggr_expr
+                let aggregates = aggr_expr
                     .iter()
-                    .map(|e| self.create_aggregate_expr(e, &input_schema))
+                    .map(|e| {
+                        tuple_err((
+                            self.create_aggregate_expr(e, &input_schema),
+                            e.name(&input_schema),
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
-                let initial_aggr =
-                    HashAggregateExec::try_new(group_expr, aggr_expr, input)?;
+                let initial_aggr = HashAggregateExec::try_new(
+                    groups.clone(),
+                    aggregates.clone(),
+                    input,
+                )?;
 
                 let schema = initial_aggr.schema();
                 let partitions = initial_aggr.partitions()?;
@@ -380,13 +415,27 @@ impl ExecutionContext {
                     return Ok(Arc::new(initial_aggr));
                 }
 
-                let (final_group, final_aggr) = initial_aggr.make_final_expr();
-
                 let merge = Arc::new(MergeExec::new(schema.clone(), partitions));
 
+                // construct the expressions for the final aggregation
+                let (final_group, final_aggr) = initial_aggr.make_final_expr(
+                    groups.iter().map(|x| x.1.clone()).collect(),
+                    aggregates.iter().map(|x| x.1.clone()).collect(),
+                );
+
+                // construct a second aggregation, keeping the final column name equal to the first aggregation
+                // and the expressions corresponding to the respective aggregate
                 Ok(Arc::new(HashAggregateExec::try_new(
-                    final_group,
-                    final_aggr,
+                    final_group
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| (expr.clone(), groups[i].1.clone()))
+                        .collect(),
+                    final_aggr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| (expr.clone(), aggregates[i].1.clone()))
+                        .collect(),
                     merge,
                 )?))
             }
@@ -423,44 +472,15 @@ impl ExecutionContext {
 
                 Ok(Arc::new(SortExec::try_new(sort_expr, input)?))
             }
-            LogicalPlan::Limit { input, expr, .. } => {
+            LogicalPlan::Limit { input, n, .. } => {
                 let input = self.create_physical_plan(input, batch_size)?;
                 let input_schema = input.as_ref().schema().clone();
 
-                match expr {
-                    &Expr::Literal(ref scalar_value) => {
-                        let limit: usize = match scalar_value {
-                            ScalarValue::Int8(limit) if *limit >= 0 => {
-                                Ok(*limit as usize)
-                            }
-                            ScalarValue::Int16(limit) if *limit >= 0 => {
-                                Ok(*limit as usize)
-                            }
-                            ScalarValue::Int32(limit) if *limit >= 0 => {
-                                Ok(*limit as usize)
-                            }
-                            ScalarValue::Int64(limit) if *limit >= 0 => {
-                                Ok(*limit as usize)
-                            }
-                            ScalarValue::UInt8(limit) => Ok(*limit as usize),
-                            ScalarValue::UInt16(limit) => Ok(*limit as usize),
-                            ScalarValue::UInt32(limit) => Ok(*limit as usize),
-                            ScalarValue::UInt64(limit) => Ok(*limit as usize),
-                            _ => Err(ExecutionError::ExecutionError(
-                                "Limit only supports non-negative integer literals"
-                                    .to_string(),
-                            )),
-                        }?;
-                        Ok(Arc::new(LimitExec::new(
-                            input_schema.clone(),
-                            input.partitions()?,
-                            limit,
-                        )))
-                    }
-                    _ => Err(ExecutionError::ExecutionError(
-                        "Limit only supports non-negative integer literals".to_string(),
-                    )),
-                }
+                Ok(Arc::new(LimitExec::new(
+                    input_schema.clone(),
+                    input.partitions()?,
+                    *n,
+                )))
             }
             _ => Err(ExecutionError::General(
                 "Unsupported logical plan variant".to_string(),
@@ -475,12 +495,11 @@ impl ExecutionContext {
         input_schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         match e {
-            Expr::Alias(expr, name) => {
-                let expr = self.create_physical_expr(expr, input_schema)?;
-                Ok(Arc::new(Alias::new(expr, &name)))
-            }
-            Expr::Column(i) => {
-                Ok(Arc::new(Column::new(*i, &input_schema.field(*i).name())))
+            Expr::Alias(expr, ..) => Ok(self.create_physical_expr(expr, input_schema)?),
+            Expr::Column(name) => {
+                // check that name exists
+                input_schema.field_with_name(&name)?;
+                Ok(Arc::new(Column::new(name)))
             }
             Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
             Expr::BinaryExpr { left, op, right } => Ok(Arc::new(BinaryExpr::new(
@@ -504,7 +523,6 @@ impl ExecutionContext {
                         physical_args.push(self.create_physical_expr(e, input_schema)?);
                     }
                     Ok(Arc::new(ScalarFunctionExpr::new(
-                        name,
                         Box::new(f.fun.clone()),
                         physical_args,
                         return_type,
@@ -616,15 +634,15 @@ impl ExecutionContext {
                     let path = Path::new(&path).join(&filename);
                     let file = fs::File::create(path)?;
                     let mut writer = csv::Writer::new(file);
-                    let it = p.execute()?;
-                    let mut it = it.lock().unwrap();
+                    let reader = p.execute()?;
+                    let mut reader = reader.lock().unwrap();
                     loop {
-                        match it.next() {
+                        match reader.next_batch() {
                             Ok(Some(batch)) => {
                                 writer.write(&batch)?;
                             }
                             Ok(None) => break,
-                            Err(e) => return Err(e),
+                            Err(e) => return Err(ExecutionError::from(e)),
                         }
                     }
                     Ok(())
@@ -643,12 +661,12 @@ impl ExecutionContext {
 }
 
 struct ExecutionContextSchemaProvider<'a> {
-    datasources: &'a HashMap<String, Box<dyn TableProvider>>,
+    datasources: &'a HashMap<String, Box<dyn TableProvider + Send + Sync>>,
     scalar_functions: &'a HashMap<String, Box<ScalarFunction>>,
 }
 
 impl SchemaProvider for ExecutionContextSchemaProvider<'_> {
-    fn get_table_meta(&self, name: &str) -> Option<Arc<Schema>> {
+    fn get_table_meta(&self, name: &str) -> Option<SchemaRef> {
         self.datasources.get(name).map(|ds| ds.schema().clone())
     }
 
@@ -670,6 +688,7 @@ mod tests {
     use super::*;
     use crate::datasource::MemTable;
     use crate::execution::physical_plan::udf::ScalarUdf;
+    use crate::logicalplan::{aggregate_expr, col, scalar_function};
     use crate::test;
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::compute::add;
@@ -686,10 +705,12 @@ mod tests {
         // there should be one batch per partition
         assert_eq!(results.len(), partition_count);
 
-        // each batch should contain 2 columns and 10 rows
+        // each batch should contain 2 columns and 10 rows with correct field names
         for batch in &results {
             assert_eq!(batch.num_columns(), 2);
             assert_eq!(batch.num_rows(), 10);
+
+            assert_eq!(field_names(batch), vec!["c1", "c2"]);
         }
 
         Ok(())
@@ -726,7 +747,7 @@ mod tests {
 
         let table = ctx.table("test")?;
         let logical_plan = LogicalPlanBuilder::from(&table.to_logical_plan())
-            .project(vec![Expr::UnresolvedColumn("c2".to_string())])?
+            .project(vec![col("c2")])?
             .build()?;
 
         let optimized_plan = ctx.optimize(&logical_plan)?;
@@ -745,7 +766,7 @@ mod tests {
             _ => assert!(false, "expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #0\
+        let expected = "Projection: #c2\
         \n  TableScan: test projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
@@ -767,19 +788,19 @@ mod tests {
         let tmp_dir = TempDir::new("execute")?;
         let ctx = create_ctx(&tmp_dir, 1)?;
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "state",
-            DataType::Utf8,
-            false,
-        )]));
+        let schema = ctx.datasources.get("test").unwrap().schema();
+        assert_eq!(schema.field_with_name("c1")?.is_nullable(), false);
 
         let plan = LogicalPlanBuilder::scan("default", "test", schema.as_ref(), None)?
-            .project(vec![col("state")])?
+            .project(vec![col("c1")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan), 1024)?;
-        assert_eq!(physical_plan.schema().field(0).is_nullable(), false);
+        assert_eq!(
+            physical_plan.schema().field_with_name("c1")?.is_nullable(),
+            false
+        );
         Ok(())
     }
 
@@ -803,7 +824,7 @@ mod tests {
             projection: None,
             projected_schema: Box::new(schema.clone()),
         })
-        .project(vec![Expr::UnresolvedColumn("b".to_string())])?
+        .project(vec![col("b")])?
         .build()?;
         assert_fields_eq(&plan, vec!["b"]);
 
@@ -824,7 +845,7 @@ mod tests {
             _ => assert!(false, "expect optimized_plan to be projection"),
         }
 
-        let expected = "Projection: #0\
+        let expected = "Projection: #b\
         \n  InMemoryScan: projection=Some([1])";
         assert_eq!(format!("{:?}", optimized_plan), expected);
 
@@ -864,6 +885,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["SUM(c1)", "SUM(c2)"]);
+
         let expected: Vec<&str> = vec!["60,220"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -878,6 +902,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["AVG(c1)", "AVG(c2)"]);
+
         let expected: Vec<&str> = vec!["1.5,5.5"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -892,6 +919,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["MAX(c1)", "MAX(c2)"]);
+
         let expected: Vec<&str> = vec!["3,10"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -906,6 +936,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["MIN(c1)", "MIN(c2)"]);
+
         let expected: Vec<&str> = vec!["0,1"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -920,6 +953,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["c1", "SUM(c2)"]);
+
         let expected: Vec<&str> = vec!["0,55", "1,55", "2,55", "3,55"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -934,6 +970,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["c1", "AVG(c2)"]);
+
         let expected: Vec<&str> = vec!["0,5.5", "1,5.5", "2,5.5", "3,5.5"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -948,6 +987,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["c1", "MAX(c2)"]);
+
         let expected: Vec<&str> = vec!["0,10", "1,10", "2,10", "3,10"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -962,6 +1004,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["c1", "MIN(c2)"]);
+
         let expected: Vec<&str> = vec!["0,1", "1,1", "2,1", "3,1"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -976,6 +1021,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["COUNT(c1)", "COUNT(c2)"]);
+
         let expected: Vec<&str> = vec!["10,10"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -989,6 +1037,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["COUNT(c1)", "COUNT(c2)"]);
+
         let expected: Vec<&str> = vec!["40,40"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -1002,6 +1053,9 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         let batch = &results[0];
+
+        assert_eq!(field_names(batch), vec!["c1", "COUNT(c2)"]);
+
         let expected = vec!["0,10", "1,10", "2,10", "3,10"];
         let mut rows = test::format_batch(&batch);
         rows.sort();
@@ -1015,16 +1069,16 @@ mod tests {
         let ctx = create_ctx(&tmp_dir, 1)?;
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("state", DataType::Utf8, false),
-            Field::new("salary", DataType::UInt32, false),
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::UInt32, false),
         ]));
 
         let plan = LogicalPlanBuilder::scan("default", "test", schema.as_ref(), None)?
             .aggregate(
-                vec![col("state")],
-                vec![aggregate_expr("SUM", col("salary"), DataType::UInt32)],
+                vec![col("c1")],
+                vec![aggregate_expr("SUM", col("c2"), DataType::UInt32)],
             )?
-            .project(vec![col("state"), col_index(1).alias("total_salary")])?
+            .project(vec![col("c1"), col("SUM(c2)").alias("total_salary")])?
             .build()?;
 
         let plan = ctx.optimize(&plan)?;
@@ -1105,7 +1159,7 @@ mod tests {
         let provider = MemTable::new(Arc::new(schema), vec![vec![batch]])?;
         ctx.register_table("t", Box::new(provider));
 
-        let myfunc: ScalarUdf = |args: &[ArrayRef]| {
+        let myfunc: ScalarUdf = Arc::new(|args: &[ArrayRef]| {
             let l = &args[0]
                 .as_any()
                 .downcast_ref::<Int32Array>()
@@ -1115,7 +1169,7 @@ mod tests {
                 .downcast_ref::<Int32Array>()
                 .expect("cast failed");
             Ok(Arc::new(add(l, r)?))
-        };
+        });
 
         let my_add = ScalarFunction::new(
             "my_add",
@@ -1151,6 +1205,7 @@ mod tests {
         let batch = &result[0];
         assert_eq!(3, batch.num_columns());
         assert_eq!(4, batch.num_rows());
+        assert_eq!(field_names(batch), vec!["a", "b", "my_add(a,b)"]);
 
         let a = batch
             .column(0)
@@ -1184,6 +1239,15 @@ mod tests {
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan, 1024)?;
         ctx.collect(physical_plan.as_ref())
+    }
+
+    fn field_names(result: &RecordBatch) -> Vec<String> {
+        result
+            .schema()
+            .fields()
+            .iter()
+            .map(|x| x.name().clone())
+            .collect::<Vec<String>>()
     }
 
     /// Execute SQL and return results

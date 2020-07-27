@@ -43,6 +43,7 @@
 #include "arrow/type.h"
 #include "arrow/type_traits.h"
 #include "arrow/util/bit_util.h"
+#include "arrow/util/bitmap_ops.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/compression.h"
 #include "arrow/util/key_value_metadata.h"
@@ -109,9 +110,11 @@ Status InvalidMessageType(MessageType expected, MessageType actual) {
 class ArrayLoader {
  public:
   explicit ArrayLoader(const flatbuf::RecordBatch* metadata,
+                       MetadataVersion metadata_version,
                        const DictionaryMemo* dictionary_memo,
                        const IpcReadOptions& options, io::RandomAccessFile* file)
       : metadata_(metadata),
+        metadata_version_(metadata_version),
         file_(file),
         dictionary_memo_(dictionary_memo),
         max_recursion_depth_(options.max_recursion_depth) {}
@@ -119,6 +122,12 @@ class ArrayLoader {
   Status ReadBuffer(int64_t offset, int64_t length, std::shared_ptr<Buffer>* out) {
     if (skip_io_) {
       return Status::OK();
+    }
+    if (offset < 0) {
+      return Status::Invalid("Negative offset for reading buffer ", buffer_index_);
+    }
+    if (length < 0) {
+      return Status::Invalid("Negative length for reading buffer ", buffer_index_);
     }
     // This construct permits overriding GetBuffer at compile time
     if (!BitUtil::IsMultipleOf8(offset)) {
@@ -186,11 +195,10 @@ class ArrayLoader {
     // we can skip that buffer without reading from shared memory
     RETURN_NOT_OK(GetFieldMetadata(field_index_++, out_));
 
-    if (::arrow::internal::HasValidityBitmap(type_id)) {
-      // Extract null_bitmap which is common to all arrays except for unions.
-      if (out_->null_count == 0) {
-        out_->buffers[0] = nullptr;
-      } else {
+    if (internal::HasValidityBitmap(type_id, metadata_version_)) {
+      // Extract null_bitmap which is common to all arrays except for unions
+      // and nulls.
+      if (out_->null_count != 0) {
         RETURN_NOT_OK(GetBuffer(buffer_index_, &out_->buffers[0]));
       }
       buffer_index_++;
@@ -312,9 +320,22 @@ class ArrayLoader {
 
     RETURN_NOT_OK(LoadCommon(type.id()));
 
-    // Validity bitmap placeholder like for NullType, which is never sent or
-    // received in IPC.
+    // With metadata V4, we can get a validity bitmap.
+    // Trying to fix up union data to do without the top-level validity bitmap
+    // is hairy:
+    // - type ids must be rewritten to all have valid values (even for former
+    //   null slots)
+    // - sparse union children must have their validity bitmaps rewritten
+    //   by ANDing the top-level validity bitmap
+    // - dense union children must be rewritten (at least one of them)
+    //   to insert the required null slots that were formerly omitted
+    // So instead we bail out.
+    if (out_->null_count != 0 && out_->buffers[0] != nullptr) {
+      return Status::Invalid(
+          "Cannot read pre-1.0.0 Union array with top-level validity bitmap");
+    }
     out_->buffers[0] = nullptr;
+    out_->null_count = 0;
 
     if (out_->length > 0) {
       RETURN_NOT_OK(GetBuffer(buffer_index_, &out_->buffers[1]));
@@ -343,6 +364,7 @@ class ArrayLoader {
 
  private:
   const flatbuf::RecordBatch* metadata_;
+  const MetadataVersion metadata_version_;
   io::RandomAccessFile* file_;
   const DictionaryMemo* dictionary_memo_;
   int max_recursion_depth_;
@@ -426,9 +448,9 @@ Status DecompressBuffers(Compression::type compression, const IpcReadOptions& op
 Result<std::shared_ptr<RecordBatch>> LoadRecordBatchSubset(
     const flatbuf::RecordBatch* metadata, const std::shared_ptr<Schema>& schema,
     const std::vector<bool>& inclusion_mask, const DictionaryMemo* dictionary_memo,
-    const IpcReadOptions& options, Compression::type compression,
-    io::RandomAccessFile* file) {
-  ArrayLoader loader(metadata, dictionary_memo, options, file);
+    const IpcReadOptions& options, MetadataVersion metadata_version,
+    Compression::type compression, io::RandomAccessFile* file) {
+  ArrayLoader loader(metadata, metadata_version, dictionary_memo, options, file);
 
   std::vector<std::shared_ptr<ArrayData>> field_data;
   std::vector<std::shared_ptr<Field>> schema_fields;
@@ -461,14 +483,14 @@ Result<std::shared_ptr<RecordBatch>> LoadRecordBatchSubset(
 Result<std::shared_ptr<RecordBatch>> LoadRecordBatch(
     const flatbuf::RecordBatch* metadata, const std::shared_ptr<Schema>& schema,
     const std::vector<bool>& inclusion_mask, const DictionaryMemo* dictionary_memo,
-    const IpcReadOptions& options, Compression::type compression,
-    io::RandomAccessFile* file) {
+    const IpcReadOptions& options, MetadataVersion metadata_version,
+    Compression::type compression, io::RandomAccessFile* file) {
   if (inclusion_mask.size() > 0) {
     return LoadRecordBatchSubset(metadata, schema, inclusion_mask, dictionary_memo,
-                                 options, compression, file);
+                                 options, metadata_version, compression, file);
   }
 
-  ArrayLoader loader(metadata, dictionary_memo, options, file);
+  ArrayLoader loader(metadata, metadata_version, dictionary_memo, options, file);
   std::vector<std::shared_ptr<ArrayData>> arrays(schema->num_fields());
   for (int i = 0; i < schema->num_fields(); ++i) {
     auto arr = std::make_shared<ArrayData>();
@@ -576,7 +598,8 @@ Result<std::shared_ptr<RecordBatch>> ReadRecordBatchInternal(
     RETURN_NOT_OK(GetCompressionExperimental(message, &compression));
   }
   return LoadRecordBatch(batch, schema, inclusion_mask, dictionary_memo, options,
-                         compression, file);
+                         internal::GetMetadataVersion(message->version()), compression,
+                         file);
 }
 
 // If we are selecting only certain fields, populate an inclusion mask for fast lookups.
@@ -688,6 +711,7 @@ Status ReadDictionary(const Buffer& metadata, DictionaryMemo* dictionary_memo,
   ARROW_ASSIGN_OR_RAISE(
       batch, LoadRecordBatch(batch_meta, ::arrow::schema({value_field}),
                              /*field_inclusion_mask=*/{}, dictionary_memo, options,
+                             internal::GetMetadataVersion(message->version()),
                              compression, file));
   if (batch->num_columns() != 1) {
     return Status::Invalid("Dictionary record batch must only contain one field");
@@ -961,7 +985,8 @@ class RecordBatchFileReaderImpl : public RecordBatchFileReader {
       return Status::Invalid("Not an Arrow file");
     }
 
-    int32_t footer_length = *reinterpret_cast<const int32_t*>(buffer->data());
+    int32_t footer_length =
+        BitUtil::FromLittleEndian(*reinterpret_cast<const int32_t*>(buffer->data()));
 
     if (footer_length <= 0 || footer_length > footer_offset_ - magic_size * 2 - 4) {
       return Status::Invalid("File is smaller than indicated metadata size");
@@ -1245,8 +1270,9 @@ Result<std::shared_ptr<SparseIndex>> ReadSparseCOOIndex(
     strides[0] = indices_elsize * ndim;
     strides[1] = indices_elsize;
   }
-  return std::make_shared<SparseCOOIndex>(
-      std::make_shared<Tensor>(indices_type, indices_data, indices_shape, strides));
+  return SparseCOOIndex::Make(
+      std::make_shared<Tensor>(indices_type, indices_data, indices_shape, strides),
+      sparse_index->isCanonical());
 }
 
 Result<std::shared_ptr<SparseIndex>> ReadSparseCSXIndex(
@@ -1375,7 +1401,7 @@ Status ReadSparseTensorMetadata(const Buffer& metadata,
   RETURN_NOT_OK(internal::GetSparseTensorMetadata(
       metadata, out_type, out_shape, out_dim_names, out_non_zero_length, out_format_id));
 
-  const flatbuf::Message* message;
+  const flatbuf::Message* message = nullptr;
   RETURN_NOT_OK(internal::VerifyMessage(metadata.data(), metadata.size(), &message));
 
   auto sparse_tensor = message->header_as_SparseTensor();

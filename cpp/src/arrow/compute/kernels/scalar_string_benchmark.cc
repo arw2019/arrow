@@ -57,9 +57,13 @@ static void AsciiUpper(benchmark::State& state) {
   UnaryStringBenchmark(state, "ascii_upper");
 }
 
-static void BinaryContainsExact(benchmark::State& state) {
-  BinaryContainsExactOptions options("abac");
-  UnaryStringBenchmark(state, "binary_contains_exact", &options);
+static void IsAlphaNumericAscii(benchmark::State& state) {
+  UnaryStringBenchmark(state, "ascii_is_alnum");
+}
+
+static void MatchSubstring(benchmark::State& state) {
+  MatchSubstringOptions options("abac");
+  UnaryStringBenchmark(state, "match_substring", &options);
 }
 
 #ifdef ARROW_WITH_UTF8PROC
@@ -70,14 +74,20 @@ static void Utf8Upper(benchmark::State& state) {
 static void Utf8Lower(benchmark::State& state) {
   UnaryStringBenchmark(state, "utf8_lower");
 }
+
+static void IsAlphaNumericUnicode(benchmark::State& state) {
+  UnaryStringBenchmark(state, "utf8_is_alnum");
+}
 #endif
 
 BENCHMARK(AsciiLower);
 BENCHMARK(AsciiUpper);
-BENCHMARK(BinaryContainsExact);
+BENCHMARK(IsAlphaNumericAscii);
+BENCHMARK(MatchSubstring);
 #ifdef ARROW_WITH_UTF8PROC
 BENCHMARK(Utf8Lower);
 BENCHMARK(Utf8Upper);
+BENCHMARK(IsAlphaNumericUnicode);
 #endif
 
 }  // namespace compute

@@ -168,6 +168,7 @@ class TestFilterKernel : public ::testing::Test {
     expected = out_datum.make_array();
     ASSERT_OK_AND_ASSIGN(out_datum, Filter(values, filter, drop_));
     actual = out_datum.make_array();
+    ASSERT_OK(actual->ValidateFull());
     AssertArraysEqual(*expected, *actual);
   }
 
@@ -417,8 +418,17 @@ TYPED_TEST(TestFilterKernelWithNumeric, ScalarInRangeAndFilterRandomNumeric) {
   }
 }
 
-using StringTypes =
-    ::testing::Types<BinaryType, StringType, LargeBinaryType, LargeStringType>;
+TEST(TestFilterKernel, NoValidityBitmapButUnknownNullCount) {
+  auto values = ArrayFromJSON(int32(), "[1, 2, 3, 4]");
+  auto filter = ArrayFromJSON(boolean(), "[true, true, false, true]");
+
+  auto expected = (*Filter(values, filter)).make_array();
+
+  filter->data()->null_count = kUnknownNullCount;
+  auto result = (*Filter(values, filter)).make_array();
+
+  AssertArraysEqual(*expected, *result);
+}
 
 template <typename TypeClass>
 class TestFilterKernelWithString : public TestFilterKernel<TypeClass> {
@@ -451,7 +461,7 @@ class TestFilterKernelWithString : public TestFilterKernel<TypeClass> {
   }
 };
 
-TYPED_TEST_SUITE(TestFilterKernelWithString, StringTypes);
+TYPED_TEST_SUITE(TestFilterKernelWithString, BinaryTypes);
 
 TYPED_TEST(TestFilterKernelWithString, FilterString) {
   this->AssertFilter(R"(["a", "b", "c"])", "[0, 1, 0]", R"(["b"])");
@@ -798,6 +808,10 @@ TEST_F(TestFilterKernelWithTable, FilterTable) {
                             expected_drop);
 }
 
+TEST(TestFilterMetaFunction, ArityChecking) {
+  ASSERT_RAISES(Invalid, CallFunction("filter", {}));
+}
+
 // ----------------------------------------------------------------------
 // Take tests
 
@@ -1011,7 +1025,7 @@ class TestTakeKernelWithString : public TestTakeKernel<TypeClass> {
   }
 };
 
-TYPED_TEST_SUITE(TestTakeKernelWithString, TestingStringTypes);
+TYPED_TEST_SUITE(TestTakeKernelWithString, BinaryTypes);
 
 TYPED_TEST(TestTakeKernelWithString, TakeString) {
   this->AssertTake(R"(["a", "b", "c"])", "[0, 1, 0]", R"(["a", "b", "a"])");
@@ -1519,6 +1533,10 @@ TEST_F(TestTakeKernelWithTable, TakeTable) {
       "[{\"a\": 4, \"b\": \"eh\"},{\"a\": 1, \"b\": \"\"},{\"a\": null, \"b\": \"yo\"}]"};
   this->AssertTake(schm, table_json, "[3, 1, 0]", expected_310);
   this->AssertChunkedTake(schm, table_json, {"[0, 1]", "[2, 3]"}, table_json);
+}
+
+TEST(TestTakeMetaFunction, ArityChecking) {
+  ASSERT_RAISES(Invalid, CallFunction("take", {}));
 }
 
 // ----------------------------------------------------------------------

@@ -60,10 +60,6 @@ Array__View <- function(array, type){
     .Call(`_arrow_Array__View` , array, type)
 }
 
-Array__Mask <- function(array){
-    .Call(`_arrow_Array__Mask` , array)
-}
-
 Array__Validate <- function(array){
     invisible(.Call(`_arrow_Array__Validate` , array))
 }
@@ -112,12 +108,20 @@ LargeListArray__value_length <- function(array, i){
     .Call(`_arrow_LargeListArray__value_length` , array, i)
 }
 
+FixedSizeListArray__value_length <- function(array, i){
+    .Call(`_arrow_FixedSizeListArray__value_length` , array, i)
+}
+
 ListArray__value_offset <- function(array, i){
     .Call(`_arrow_ListArray__value_offset` , array, i)
 }
 
 LargeListArray__value_offset <- function(array, i){
     .Call(`_arrow_LargeListArray__value_offset` , array, i)
+}
+
+FixedSizeListArray__value_offset <- function(array, i){
+    .Call(`_arrow_FixedSizeListArray__value_offset` , array, i)
 }
 
 ListArray__raw_value_offsets <- function(array){
@@ -250,6 +254,10 @@ ChunkedArray__Validate <- function(chunked_array){
 
 ChunkedArray__Equals <- function(x, y){
     .Call(`_arrow_ChunkedArray__Equals` , x, y)
+}
+
+ChunkedArray__ToString <- function(x){
+    .Call(`_arrow_ChunkedArray__ToString` , x)
 }
 
 util___Codec__Create <- function(codec, compression_level){
@@ -556,6 +564,10 @@ large_list__ <- function(x){
     .Call(`_arrow_large_list__` , x)
 }
 
+fixed_size_list__ <- function(x, list_size){
+    .Call(`_arrow_fixed_size_list__` , x, list_size)
+}
+
 struct_ <- function(fields){
     .Call(`_arrow_struct_` , fields)
 }
@@ -658,6 +670,18 @@ LargeListType__value_field <- function(type){
 
 LargeListType__value_type <- function(type){
     .Call(`_arrow_LargeListType__value_type` , type)
+}
+
+FixedSizeListType__value_field <- function(type){
+    .Call(`_arrow_FixedSizeListType__value_field` , type)
+}
+
+FixedSizeListType__value_type <- function(type){
+    .Call(`_arrow_FixedSizeListType__value_type` , type)
+}
+
+FixedSizeListType__list_size <- function(type){
+    .Call(`_arrow_FixedSizeListType__list_size` , type)
 }
 
 dataset___expr__field_ref <- function(name){
@@ -1316,12 +1340,12 @@ ipc___RecordBatchWriter__Close <- function(batch_writer){
     invisible(.Call(`_arrow_ipc___RecordBatchWriter__Close` , batch_writer))
 }
 
-ipc___RecordBatchFileWriter__Open <- function(stream, schema, use_legacy_format){
-    .Call(`_arrow_ipc___RecordBatchFileWriter__Open` , stream, schema, use_legacy_format)
+ipc___RecordBatchFileWriter__Open <- function(stream, schema, use_legacy_format, metadata_version){
+    .Call(`_arrow_ipc___RecordBatchFileWriter__Open` , stream, schema, use_legacy_format, metadata_version)
 }
 
-ipc___RecordBatchStreamWriter__Open <- function(stream, schema, use_legacy_format){
-    .Call(`_arrow_ipc___RecordBatchStreamWriter__Open` , stream, schema, use_legacy_format)
+ipc___RecordBatchStreamWriter__Open <- function(stream, schema, use_legacy_format, metadata_version){
+    .Call(`_arrow_ipc___RecordBatchStreamWriter__Open` , stream, schema, use_legacy_format, metadata_version)
 }
 
 Array__GetScalar <- function(x, i){
