@@ -31,6 +31,7 @@
 #include "arrow/builder.h"
 #include "arrow/memory_pool.h"
 #include "arrow/testing/gtest_util.h"
+#include "arrow/testing/random.h"
 #include "arrow/testing/util.h"
 
 namespace arrow {
@@ -40,6 +41,7 @@ class TestBase : public ::testing::Test {
   void SetUp() {
     pool_ = default_memory_pool();
     random_seed_ = 0;
+    random::RandomArrayGenerator rand(0x564a3bf0);
   }
 
   std::shared_ptr<Buffer> MakeRandomNullBitmap(int64_t length, int64_t null_count) {
