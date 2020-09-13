@@ -81,6 +81,27 @@ struct SumState {
     return *this;
   }
 
+  template <typename ValueType>
+  void MergeOne(ValueType value) {
+    this->sum += value;
+  }
+
+  template<int64_t kNoNullsRoundSize>
+  void MergeRoundedTotals(const int64_t length_rounded, const T* values){
+    typename SumType::c_type sum_rounded[kNoNullsRoundSize] = {0};
+
+    // Unroll the loop to add the results in parallel
+    for (int64_t i = 0; i < length_rounded; i += kNoNullsRoundSize){
+      for (int64_t k = 0; k < kNoNullsRoundSize; k++) {	
+        sum_rounded[k] += values[i + k];	
+      }	    
+    }
+    for (int64_t k = 0; k < kNoNullsRoundSize; k++) {
+      this->MergeOne(sum_rounded[k]);
+    }
+
+  }
+
  public:
   void Consume(const Array& input) {
     const ArrayType& array = static_cast<const ArrayType&>(input);
@@ -99,21 +120,12 @@ struct SumState {
   ThisType ConsumeNoNulls(const T* values, const int64_t length) const {
     ThisType local;
     const int64_t length_rounded = BitUtil::RoundDown(length, kNoNullsRoundSize);
-    typename SumType::c_type sum_rounded[kNoNullsRoundSize] = {0};
 
-    // Unroll the loop to add the results in parallel
-    for (int64_t i = 0; i < length_rounded; i += kNoNullsRoundSize) {
-      for (int64_t k = 0; k < kNoNullsRoundSize; k++) {
-        sum_rounded[k] += values[i + k];
-      }
-    }
-    for (int64_t k = 0; k < kNoNullsRoundSize; k++) {
-      local.sum += sum_rounded[k];
-    }
+    local.MergeRoundedTotals<kNoNullsRoundSize>(length_rounded, values);
 
     // The trailing part
     for (int64_t i = length_rounded; i < length; ++i) {
-      local.sum += values[i];
+      local.MergeOne(values[i]);
     }
 
     local.count = length;
@@ -138,13 +150,13 @@ struct SumState {
     if (bits < 0xFF) {
       // Some nulls
       for (size_t i = 0; i < 8; i++) {
-        local.sum += MaskedValue(bits & (1U << i), values[i]);
+        local.MergeOne(MaskedValue(bits & (1U << i), values[i]));
       }
       local.count += BitUtil::kBytePopcount[bits];
     } else {
       // No nulls
       for (size_t i = 0; i < 8; i++) {
-        local.sum += values[i];
+        local.MergeOne(values[i]);
       }
       local.count += 8;
     }
@@ -165,7 +177,7 @@ struct SumState {
     const int64_t leading_bits = p.leading_bits;
     while (idx < leading_bits) {
       if (BitUtil::GetBit(bitmap, offset)) {
-        local.sum += values[idx];
+        local.MergeOne(values[idx]);
         local.count++;
       }
       idx++;
@@ -206,7 +218,7 @@ struct SumState {
         } else {  // The end part
           for (int64_t i = 0; i < current_block.length; i++) {
             if (BitUtil::GetBit(bitmap, offset)) {
-              local.sum += values[idx];
+              local.MergeOne(values[idx]);
               local.count++;
             }
             idx++;
