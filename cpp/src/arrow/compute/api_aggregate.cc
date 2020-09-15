@@ -45,5 +45,9 @@ Result<Datum> Mode(const Datum& value, ExecContext* ctx) {
   return CallFunction("mode", {value}, ctx);
 }
 
+Result<Datum> Variance(const Datum& value, ExecContext* ctx) {
+  return CallFunction("variance", {value}, ctx);
+}
+
 }  // namespace compute
 }  // namespace arrow

@@ -261,6 +261,48 @@ struct SumState<kRoundSize, BooleanType, SimdLevel> {
   typename SumType::c_type sum = 0;
 };
 
+template <int64_t kRoundSize, typename ArrowType, SimdLevel::type SimdLevel>
+struct VarianceState: public SumState<kRoundSize, ArrowType, SimdLevel> {
+  using SumType = typename FindAccumulatorType<ArrowType>::Type;
+  using ThisType = SumState<kRoundSize, ArrowType, SimdLevel>;
+  using T = typename TypeTraits<ArrowType>::CType;
+  using ArrayType = typename TypeTraits<ArrowType>::ArrayType;
+
+  ThisType operator+(const ThisType& rhs) const  {
+    return ThisType(this->count + rhs.count, this->sum + rhs.sum);
+  }
+
+  ThisType& operator+=(const ThisType& rhs) {
+    this->count += rhs.count;
+    this->sum += rhs.sum;
+
+    return *this;
+  }
+
+  template <typename ValueType>
+  void MergeOne(ValueType value)  {
+    this->sum += value;
+  }
+
+  template<int64_t kNoNullsRoundSize>
+  void MergeRoundedTotals(const int64_t length_rounded, const T* values) {
+    typename SumType::c_type sum_rounded[kNoNullsRoundSize] = {0};
+
+    // Unroll the loop to add the results in parallel
+    for (int64_t i = 0; i < length_rounded; i += kNoNullsRoundSize){
+      for (int64_t k = 0; k < kNoNullsRoundSize; k++) {	
+        sum_rounded[k] += values[i + k];	
+      }	    
+    }
+    for (int64_t k = 0; k < kNoNullsRoundSize; k++) {
+      this->MergeOne(sum_rounded[k]);
+    }
+
+  }
+
+};
+
+
 template <uint64_t kRoundSize, typename ArrowType, SimdLevel::type SimdLevel>
 struct SumImpl : public ScalarAggregator {
   using ArrayType = typename TypeTraits<ArrowType>::ArrayType;
@@ -301,6 +343,33 @@ struct MeanImpl : public SumImpl<kRoundSize, ArrowType, SimdLevel> {
       out->value = std::make_shared<DoubleScalar>(mean);
     }
   }
+};
+
+template <uint64_t kRoundSize, typename ArrowType, SimdLevel::type SimdLevel>
+struct VarianceImpl : public ScalarAggregator {
+  using ArrayType = typename TypeTraits<ArrowType>::ArrayType;
+  using ThisType = VarianceImpl<kRoundSize, ArrowType, SimdLevel>;
+  using SumType = typename FindAccumulatorType<ArrowType>::Type;
+  using OutputType = typename TypeTraits<SumType>::ScalarType;
+
+  void Consume(KernelContext*, const ExecBatch& batch)  {
+    this->state.Consume(ArrayType(batch[0].array()));
+  }
+
+  void MergeFrom(KernelContext*, const KernelState& src)  {
+    const auto& other = checked_cast<const ThisType&>(src);
+    this->state += other.state;
+  }
+
+  void Finalize(KernelContext*, Datum* out)  {
+    if (state.count == 0) {
+      out->value = std::make_shared<OutputType>();
+    } else {
+      out->value = MakeScalar(state.sum);
+    }
+  }
+
+  VarianceState<kRoundSize, ArrowType, SimdLevel> state;
 };
 
 template <template <typename> class KernelClass>

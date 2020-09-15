@@ -117,6 +117,11 @@ struct MeanImplDefault
     : public MeanImpl<RoundSizeDefault<typename TypeTraits<ArrowType>::CType>::size,
                       ArrowType, SimdLevel::NONE> {};
 
+template <typename ArrowType>
+struct VarianceImplDefault
+    : public VarianceImpl<RoundSizeDefault<typename TypeTraits<ArrowType>::CType>::size,
+                      ArrowType, SimdLevel::NONE> {};
+
 std::unique_ptr<KernelState> SumInit(KernelContext* ctx, const KernelInitArgs& args) {
   SumLikeInit<SumImplDefault> visitor(ctx, *args.inputs[0].type);
   return visitor.Create();
@@ -124,6 +129,11 @@ std::unique_ptr<KernelState> SumInit(KernelContext* ctx, const KernelInitArgs& a
 
 std::unique_ptr<KernelState> MeanInit(KernelContext* ctx, const KernelInitArgs& args) {
   SumLikeInit<MeanImplDefault> visitor(ctx, *args.inputs[0].type);
+  return visitor.Create();
+}
+
+std::unique_ptr<KernelState> VarianceInit(KernelContext* ctx, const KernelInitArgs& args) {
+  SumLikeInit<VarianceImplDefault> visitor(ctx, *args.inputs[0].type);
   return visitor.Create();
 }
 
@@ -219,6 +229,12 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
     aggregate::AddMeanAvx512AggKernels(func.get());
   }
 #endif
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  func = std::make_shared<ScalarAggregateFunction>("variance", Arity::Unary());
+  // aggregate::AddBasicAggKernels(aggregate::VarianceInit, {boolean()}, float64(), func.get());
+  aggregate::AddBasicAggKernels(aggregate::VarianceInit, NumericTypes(), float64(),
+                                func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
 
   static auto default_minmax_options = MinMaxOptions::Defaults();
