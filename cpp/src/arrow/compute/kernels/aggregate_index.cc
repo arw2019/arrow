@@ -100,12 +100,7 @@ struct IndexImpl : public ScalarAggregator {
   }
 
   void Finalize(KernelContext*, Datum* out) override {
-    if (this->state.count <= options.ddof) {
       out->value = std::make_shared<DoubleScalar>();
-    } else {
-      double stdev = sqrt(this->state.m2 / (this->state.count - options.ddof));
-      out->value = std::make_shared<DoubleScalar>(stdev);
-    }
   }
 
   std::shared_ptr<DataType> out_type;
@@ -149,7 +144,7 @@ std::unique_ptr<KernelState> IndexInit(KernelContext* ctx, const KernelInitArgs&
   return visitor.Create();
 }
 
-void AddIndexKernels(KernelInit init, const std::vector<std::shared_ptr<DataType>>& types,
+void AddFindIndexKernels(KernelInit init, const std::vector<std::shared_ptr<DataType>>& types,
                      ScalarAggregateFunction* func) {
   for (const auto& ty : types) {
     auto sig = KernelSignature::Make({InputType::Array(ty)}, float64());
@@ -159,11 +154,11 @@ void AddIndexKernels(KernelInit init, const std::vector<std::shared_ptr<DataType
 
 }  // namespace
 
-std::shared_ptr<ScalarAggregateFunction> AddIndexAggKernels() {
+std::shared_ptr<ScalarAggregateFunction> AddFindIndexAggKernels() {
   static auto default_index_options = FindIndexOptions::Defaults();
   auto func = std::make_shared<ScalarAggregateFunction>("find_index", Arity::Unary(),
                                                         &default_index_options);
-  AddIndexKernels(IndexInit, internal::NumericTypes(), func.get());
+  AddFindIndexKernels(IndexInit, internal::NumericTypes(), func.get());
   return func;
 }
 

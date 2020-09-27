@@ -242,7 +242,7 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
 
   DCHECK_OK(registry->AddFunction(aggregate::AddModeAggKernels()));
 
-  DCHECK_OK(registry->AddFunction(aggregate::AddIndexAggKernels()));
+  DCHECK_OK(registry->AddFunction(aggregate::AddFindIndexAggKernels()));
 
 }
 
