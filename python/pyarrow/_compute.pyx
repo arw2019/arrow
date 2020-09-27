@@ -609,3 +609,13 @@ cdef class MinMaxOptions(FunctionOptions):
 
     cdef const CFunctionOptions* get_options(self) except NULL:
         return &self.min_max_options
+
+cdef class FindIndexOptions(FunctionOptions):
+    cdef:
+        CFindIndexOptions find_index_options
+
+    def __cinit__(self, ddof=0):
+        self.find_index_options.ddof = ddof
+    
+    cdef const CFunctionOptions* get_options(self) except NULL:
+        return &self.find_index_options
