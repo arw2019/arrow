@@ -77,11 +77,12 @@ struct ARROW_EXPORT MinMaxOptions : public FunctionOptions {
 };
 
 struct ARROW_EXPORT FindIndexOptions : public FunctionOptions {
-  explicit FindIndexOptions(int ddof = 0) : ddof(ddof) {}
+  explicit FindIndexOptions(int64_t start=0, int64_t end=1) : start(start), end(end) {}
 
-  static FindIndexOptions Defaults() { return FindIndexOptions{}; }
+  static FindIndexOptions Defaults() {return FindIndexOptions{}; }
 
-  int ddof = 0;
+  int start = 0;
+  int end = 1;
 };
 
 /// @}
