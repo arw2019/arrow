@@ -76,6 +76,14 @@ struct ARROW_EXPORT MinMaxOptions : public FunctionOptions {
   enum Mode null_handling = SKIP;
 };
 
+struct ARROW_EXPORT FindIndexOptions : public FunctionOptions {
+  explicit FindIndexOptions(int ddof = 0) : ddof(ddof) {}
+
+  static FindIndexOptions Defaults() { return FindIndexOptions{}; }
+
+  int ddof = 0;
+};
+
 /// @}
 
 /// \brief Count non-null (or null) values in an array.
@@ -144,6 +152,12 @@ Result<Datum> MinMax(const Datum& value,
 /// \note API not yet finalized
 ARROW_EXPORT
 Result<Datum> Mode(const Datum& value, ExecContext* ctx = NULLPTR);
+
+ARROW_EXPORT
+Result<Datum> FindIndex(const Datum& value,
+                    const FindIndexOptions& options = FindIndexOptions::Defaults(),
+                    ExecContext* ctx = NULLPTR);
+
 
 }  // namespace compute
 }  // namespace arrow

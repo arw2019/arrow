@@ -45,5 +45,9 @@ Result<Datum> Mode(const Datum& value, ExecContext* ctx) {
   return CallFunction("mode", {value}, ctx);
 }
 
+Result<Datum> FindIndex(const Datum& value, const FindIndexOptions& options, ExecContext* ctx) {
+  return CallFunction("find_index", {value}, &options, ctx);
+}
+
 }  // namespace compute
 }  // namespace arrow
