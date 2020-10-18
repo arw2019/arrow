@@ -29,6 +29,7 @@
 #include "arrow/io/file.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/logging.h"
+#include "arrow/util/make_unique.h"
 #include "arrow/util/ubsan.h"
 #include "parquet/column_reader.h"
 #include "parquet/column_scanner.h"
@@ -131,7 +132,7 @@ class SerializedRowGroup : public RowGroupReader::Contents {
         properties_(props),
         row_group_ordinal_(row_group_number),
         file_decryptor_(file_decryptor) {
-    row_group_metadata_ = file_metadata->RowGroup(row_group_number);
+    row_group_metadata_ = arrow::internal::make_unique<RowGroupMetaData>(file_metadata->RowGroup(row_group_number));
   }
 
   const RowGroupMetaData* metadata() const override { return row_group_metadata_.get(); }
