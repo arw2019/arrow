@@ -263,7 +263,7 @@ class FileReaderImpl : public FileReader {
     for (auto row_group : row_groups) {
       // Can throw exception
       records_to_read +=
-          reader_->metadata()->RowGroup(row_group)->ColumnChunk(i)->num_values();
+          reader_->metadata()->RowGroup(row_group).ColumnChunk(i)->num_values();
     }
     return reader->NextBatch(records_to_read, out);
     END_PARQUET_CATCH_EXCEPTIONS
@@ -897,7 +897,7 @@ Status FileReaderImpl::GetRecordBatchReader(const std::vector<int>& row_groups,
     ::arrow::RecordBatchVector batches;
 
     for (int row_group : row_groups) {
-      int64_t num_rows = parquet_reader()->metadata()->RowGroup(row_group)->num_rows();
+      int64_t num_rows = parquet_reader()->metadata()->RowGroup(row_group).num_rows();
 
       batches.insert(batches.end(), num_rows / batch_size, max_sized_batch);
 
@@ -914,7 +914,7 @@ Status FileReaderImpl::GetRecordBatchReader(const std::vector<int>& row_groups,
 
   int64_t num_rows = 0;
   for (int row_group : row_groups) {
-    num_rows += parquet_reader()->metadata()->RowGroup(row_group)->num_rows();
+    num_rows += parquet_reader()->metadata()->RowGroup(row_group).num_rows();
   }
 
   using ::arrow::RecordBatchIterator;
@@ -999,7 +999,7 @@ Status FileReaderImpl::ReadRowGroups(const std::vector<int>& row_groups,
     num_rows = columns[0]->length();
   } else {
     for (int i : row_groups) {
-      num_rows += parquet_reader()->metadata()->RowGroup(i)->num_rows();
+      num_rows += parquet_reader()->metadata()->RowGroup(i).num_rows();
     }
   }
 

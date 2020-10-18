@@ -272,7 +272,7 @@ class PARQUET_EXPORT FileMetaData {
   /// \param[in] index of the RowGroup to retrieve.
   ///
   /// \throws ParquetException if the index is out of bound.
-  std::unique_ptr<RowGroupMetaData> RowGroup(int index) const;
+  const RowGroupMetaData& RowGroup(int index) const;
 
   /// \brief Return the version of the file.
   ParquetVersion::type version() const;
