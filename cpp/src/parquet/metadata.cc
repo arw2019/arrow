@@ -623,7 +623,7 @@ class FileMetaData::FileMetaDataImpl {
     }
   }
 
-  std::unique_ptr<RowGroupMetaData> RowGroup(int i) {
+  const RowGroupMetaData& RowGroup(int i) {
     if (!(i < num_row_groups())) {
       std::stringstream ss;
       ss << "The file only has " << num_row_groups()
@@ -735,7 +735,7 @@ FileMetaData::FileMetaData()
 
 FileMetaData::~FileMetaData() {}
 
-std::unique_ptr<RowGroupMetaData> FileMetaData::RowGroup(int i) const {
+const RowGroupMetaData& FileMetaData::RowGroup(int i) const {
   return impl_->RowGroup(i);
 }
 
