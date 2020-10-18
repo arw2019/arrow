@@ -132,7 +132,7 @@ class SerializedRowGroup : public RowGroupReader::Contents {
         properties_(props),
         row_group_ordinal_(row_group_number),
         file_decryptor_(file_decryptor) {
-    row_group_metadata_ = arrow::internal::make_unique<RowGroupMetaData>(file_metadata->RowGroup(row_group_number));
+    row_group_metadata_ = std::unique_ptr<RowGroupMetaData>(std::move(file_metadata->RowGroup(row_group_number));
   }
 
   const RowGroupMetaData* metadata() const override { return row_group_metadata_.get(); }
