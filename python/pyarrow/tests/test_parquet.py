@@ -23,6 +23,7 @@ import io
 import json
 import os
 import pytest
+import sys
 
 import numpy as np
 
@@ -3434,6 +3435,15 @@ def test_decimal_roundtrip_negative_scale(tempdir):
     result_table = _read_table(string_filename)
     result = result_table.to_pandas()
     tm.assert_frame_equal(result, expected)
+
+
+def test_decimal_roundtrip_large(tempdir):
+    expected = pa.table([[decimal.Decimal(str(sys.maxsize+1)), decimal.Decimal('1.111')]], names=['decimal'])
+    filename = tempdir / 'decimals.parquet'
+    string_filename = str(filename)
+    _write_table(expected, string_filename)
+    result_table = _read_table(string_filename)
+    assert result_table.equals(expected)
 
 
 @pytest.mark.pandas
