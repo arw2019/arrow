@@ -1757,6 +1757,13 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
             "arrow::compute::VarianceOptions"(CFunctionOptions):
         int ddof
 
+    cdef cppclass CGetIndexOptions \
+            "arrow::compute::GetIndexOptions"(CFunctionOptions):
+        CGetIndexOptions(CDatum value, int64_t start, int64_t end)
+        CDatum value
+        int64_t start
+        int64_t end
+
     enum CMinMaxMode \
             "arrow::compute::MinMaxOptions::Mode":
         CMinMaxMode_SKIP \

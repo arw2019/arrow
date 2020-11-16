@@ -49,6 +49,10 @@ Result<Datum> All(const Datum& value, ExecContext* ctx) {
   return CallFunction("all", {value}, ctx);
 }
 
+Result<Datum> GetIndex(const Datum& value, const GetIndexOptions options, ExecContext* ctx = NULLPTR){
+   return CallFunction("get_index", {value}, &options, ctx);
+}
+
 Result<Datum> Mode(const Datum& value, const ModeOptions& options, ExecContext* ctx) {
   return CallFunction("mode", {value}, &options, ctx);
 }

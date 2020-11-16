@@ -710,6 +710,22 @@ class CountOptions(_CountOptions):
     def __init__(self, count_mode='count_non_null'):
         self._set_options(count_mode)
 
+cdef class _GetIndexOptions(FunctionOptions):
+    cdef:
+        unique_ptr[CGetIndexOptions] get_index_options
+    
+    cdef const CFunctionOptions* get_options(self) except NULL:
+        return self.get_index_options.get()
+    
+    def _set_options(self, value, start, end):
+        self.get_index_options.reset(new CGetIndexOptions(
+            (<CDatum> value),
+            start,
+            end))
+
+class GetIndexOptions(_GetIndexOptions):
+    def __init__(self, value, start, end):
+        self._set_options(value, start, end)
 
 cdef class _ModeOptions(FunctionOptions):
     cdef:

@@ -572,6 +572,93 @@ struct MinMaxInitState {
   }
 };
 
+// ----------------------------------------------------------------------
+// GetIndex implementation
+
+template <typename ArrowType>
+struct GetIndexImpl: public ScalarAggregator{
+  using ThisType = GetIndexImpl;
+  using ArrayType = typename TypeTraits<ArrowType>::ArrayType;
+  using T = typename ArrowType::c_type;
+  using ScalarType = typename TypeTraits<ArrowType>::ScalarType;
+
+  GetIndexImpl(const GetIndexOptions& options): options(options) {}
+  
+  void Consume(KernelContext*, const ExecBatch& batch) override {
+    if (this->found == true){
+      return;
+    }
+
+    const auto& val = (this->options.value);
+
+    ArrayType arr(batch[0].array());
+    const auto len = arr.length();
+      for (int64_t i = 0; i<len; i++){
+        const auto x = Datum(arr.Value(i));
+        const auto& y = val; 
+        if (i > this->options.end) {return;}
+        if (x == y){
+          this->idx_found = i;
+          found = true;
+          return;
+      }
+    }
+
+    this->idx_found += len;
+  }
+
+  void MergeFrom(KernelContext*, KernelState&& src) override {
+    const auto& other = checked_cast<const ThisType&>(src);
+    if (this->found == false){
+      this->found = other.found;
+      this->idx_found += other.idx_found;
+    } 
+  }
+
+  void Finalize(KernelContext* ctx, Datum* out) override {
+    if (this->found == true){
+      *out = Datum(this->idx_found);
+    } else {
+        ctx->SetStatus(Status::Invalid("Unknown CountOptions encountered"));
+    }
+  }
+
+  GetIndexOptions options;
+  int64_t idx_found = 0;
+  bool found = false;
+};
+
+struct GetIndexInitState {
+  std::unique_ptr<KernelState> state;
+  KernelContext* ctx;
+  const DataType& in_type;
+  const GetIndexOptions& options;
+
+  GetIndexInitState(KernelContext* ctx, const DataType& in_type,
+                  const GetIndexOptions& options)
+      : ctx(ctx), in_type(in_type), options(options) {}
+
+  Status Visit(const DataType&) {
+    return Status::NotImplemented("No min/max implemented");
+  }
+
+  Status Visit(const BooleanType&) {
+    state.reset(new GetIndexImpl<BooleanType>(options));
+    return Status::OK();
+  }
+
+  template <typename Type>
+  enable_if_number<Type, Status> Visit(const Type&) {
+    state.reset(new GetIndexImpl<Type>(options));
+    return Status::OK();
+  }
+
+  std::unique_ptr<KernelState> Create() {
+    ctx->SetStatus(VisitTypeInline(in_type, this));
+    return std::move(state);
+  }
+};
+
 }  // namespace aggregate
 }  // namespace compute
 }  // namespace arrow

@@ -40,6 +40,7 @@ from pyarrow._compute import (  # noqa
     StrptimeOptions,
     TakeOptions,
     VarianceOptions,
+    GetIndexOptions,
     # Functions
     function_registry,
     call_function,

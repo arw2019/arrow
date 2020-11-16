@@ -251,6 +251,22 @@ void AddMinMaxKernels(KernelInit init,
   }
 }
 
+
+std::unique_ptr<KernelState> GetIndexInit(KernelContext* ctx, const KernelInitArgs& args) {
+  GetIndexInitState visitor(ctx, *args.inputs[0].type,  static_cast<const GetIndexOptions&>(*args.options));
+  return visitor.Create();
+}
+
+void AddGetIndexKernels(KernelInit init,
+                      const std::vector<std::shared_ptr<DataType>>& types,
+                      ScalarAggregateFunction* func) {
+  for (const auto& ty : types) {
+    // array[T] -> scalar[int64_t]
+    auto sig = KernelSignature::Make({InputType::Array(ty)}, ValueDescr::Scalar(int64()));
+    AddAggKernel(std::move(sig), init, func);
+  }
+}
+
 }  // namespace aggregate
 
 namespace internal {
@@ -285,6 +301,8 @@ const FunctionDoc all_doc{
     "Test whether all elements in a boolean array evaluate to true.",
     ("Null values are ignored."),
     {"array"}};
+
+const FunctionDoc get_index_doc{"HEY",("YO\n."),  {"array"}, "GetIndexOptions"};
 
 }  // namespace
 
@@ -366,6 +384,14 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
   func = std::make_shared<ScalarAggregateFunction>("all", Arity::Unary(), &all_doc);
   aggregate::AddBasicAggKernels(aggregate::AllInit, {boolean()}, boolean(), func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
+
+
+  func = std::make_shared<ScalarAggregateFunction>("get_index", Arity::Unary(), &get_index_doc);
+  aggregate::AddGetIndexKernels(aggregate::GetIndexInit, {boolean()}, func.get());
+  aggregate::AddGetIndexKernels(aggregate::GetIndexInit, {NumericTypes()}, func.get());
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+
 }
 
 }  // namespace internal

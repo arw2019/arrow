@@ -76,6 +76,15 @@ struct ARROW_EXPORT MinMaxOptions : public FunctionOptions {
   enum Mode null_handling;
 };
 
+
+struct ARROW_EXPORT GetIndexOptions: public FunctionOptions{
+  explicit GetIndexOptions(Datum value, int64_t start=0, int64_t end=std::numeric_limits<int64_t>::infinity()) : value(value), start(start), end(end) {}
+
+Datum value;
+int64_t start;
+int64_t end;
+};
+
 /// \brief Control Mode kernel behavior
 ///
 /// Returns top-n common values and counts.
@@ -200,6 +209,11 @@ ARROW_EXPORT
 Result<Datum> Mode(const Datum& value,
                    const ModeOptions& options = ModeOptions::Defaults(),
                    ExecContext* ctx = NULLPTR);
+
+ARROW_EXPORT
+Result<Datum> GetIndex(const Datum& value, const Datum& lookup_value, int64_t start, int64_t end, ExecContext* ctx = NULLPTR);
+// ARROW_EXPORT
+// Result<Datum> GetIndex(const Datum& value, const GetIndexOptions options, ExecContext* ctx = NULLPTR);
 
 /// \brief Calculate the standard deviation of a numeric array
 ///
