@@ -229,6 +229,48 @@ std::unique_ptr<KernelState> AllInit(KernelContext*, const KernelInitArgs& args)
   return ::arrow::internal::make_unique<BooleanAllImpl>();
 }
 
+// ----------------------------------------------------------------------
+// All_kleene implementation
+
+struct BooleanAllKleeneImpl : public ScalarAggregator {
+  void Consume(KernelContext*, const ExecBatch& batch) override {
+    BooleanArray arr(batch[0].array());
+
+    const auto arr_length = arr.length();
+    const auto null_count = arr.null_count();
+    const auto valid_count = arr_length - null_count;
+
+    if (null_count > 0) {
+      this->contains_null = true;
+      return;
+    }
+
+    const auto true_count = arr.true_count();
+    if (true_count != valid_count) {
+      this->all = false;
+    }
+  }
+  void MergeFrom(KernelContext*, KernelState&& src) override {
+    const auto& other = checked_cast<const BooleanAllKleeneImpl&>(src);
+    this->all &= other.all;
+    this->contains_null |= other.contains_null;
+  }
+
+  void Finalize(KernelContext*, Datum* out) override {
+    if (this->contains_null == true) {
+      out->value = std::make_shared<BooleanScalar>();
+    } else {
+      out->value = std::make_shared<BooleanScalar>(this->all);
+    }
+  }
+  bool all = true;
+  bool contains_null = false;
+};
+
+std::unique_ptr<KernelState> AllKleeneInit(KernelContext*, const KernelInitArgs& args) {
+  return ::arrow::internal::make_unique<BooleanAllKleeneImpl>();
+}
+
 void AddBasicAggKernels(KernelInit init,
                         const std::vector<std::shared_ptr<DataType>>& types,
                         std::shared_ptr<DataType> out_ty, ScalarAggregateFunction* func,
@@ -282,6 +324,11 @@ const FunctionDoc any_doc{
     {"array"}};
 
 const FunctionDoc all_doc{
+    "Test whether all elements in a boolean array evaluate to true.",
+    ("Null values are ignored."),
+    {"array"}};
+
+const FunctionDoc all_kleene_doc{
     "Test whether all elements in a boolean array evaluate to true.",
     ("Null values are ignored."),
     {"array"}};
@@ -365,6 +412,13 @@ void RegisterScalarAggregateBasic(FunctionRegistry* registry) {
   // all
   func = std::make_shared<ScalarAggregateFunction>("all", Arity::Unary(), &all_doc);
   aggregate::AddBasicAggKernels(aggregate::AllInit, {boolean()}, boolean(), func.get());
+  DCHECK_OK(registry->AddFunction(std::move(func)));
+
+  // all_kleene
+  func = std::make_shared<ScalarAggregateFunction>("all_kleene", Arity::Unary(),
+                                                   &all_kleene_doc);
+  aggregate::AddBasicAggKernels(aggregate::AllKleeneInit, {boolean()}, boolean(),
+                                func.get());
   DCHECK_OK(registry->AddFunction(std::move(func)));
 }
 

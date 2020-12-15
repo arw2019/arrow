@@ -49,6 +49,10 @@ Result<Datum> All(const Datum& value, ExecContext* ctx) {
   return CallFunction("all", {value}, ctx);
 }
 
+Result<Datum> AllKleene(const Datum& value, ExecContext* ctx) {
+  return CallFunction("all_kleene", {value}, ctx);
+}
+
 Result<Datum> Mode(const Datum& value, const ModeOptions& options, ExecContext* ctx) {
   return CallFunction("mode", {value}, &options, ctx);
 }

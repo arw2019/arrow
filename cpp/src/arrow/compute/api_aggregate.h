@@ -182,6 +182,21 @@ Result<Datum> Any(const Datum& value, ExecContext* ctx = NULLPTR);
 ARROW_EXPORT
 Result<Datum> All(const Datum& value, ExecContext* ctx = NULLPTR);
 
+/// \brief Test whether all elements in a boolean array evaluate to true.
+///
+/// This function returns true if all of the elements in the array evaluate
+/// to true and false otherwise. If null values are encountered a null value
+/// is returned.
+///
+/// \param[in] value input datum, expecting a boolean array
+/// \param[in] ctx the function execution context, optional
+/// \return resulting datum as a BooleanScalar
+
+/// \since 3.0.0
+/// \note API not yet finalized
+ARROW_EXPORT
+Result<Datum> AllKleene(const Datum& value, ExecContext* ctx = NULLPTR);
+
 /// \brief Calculate the modal (most common) value of a numeric array
 ///
 /// This function returns top-n most common values and number of times they occur as

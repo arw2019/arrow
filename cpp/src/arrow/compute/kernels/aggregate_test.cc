@@ -836,6 +836,77 @@ TEST_F(TestAllKernel, Basics) {
 }
 
 //
+// All Kleene
+//
+
+class TestPrimitiveAllKleeneKernel : public ::testing::Test {
+ public:
+  void AssertAllKleeneIs(const Datum& array, bool expected) {
+    ASSERT_OK_AND_ASSIGN(Datum out, AllKleene(array));
+    const BooleanScalar& out_all_kleene = out.scalar_as<BooleanScalar>();
+    const auto expected_all_kleene = static_cast<const BooleanScalar>(expected);
+    ASSERT_EQ(out_all_kleene, expected_all_kleene);
+  }
+
+
+  void AssertAllKleeneIs(const std::string& json, bool expected) {
+    auto array = ArrayFromJSON(type_singleton(), json);
+    AssertAllKleeneIs(array, expected);
+  }
+
+  void AssertAllKleeneIs(const std::vector<std::string>& json, bool expected) {
+    auto array = ChunkedArrayFromJSON(type_singleton(), json);
+    AssertAllKleeneIs(array, expected);
+  }
+
+  void AssertAllKleeneIsNull(const Datum& array) {
+    ASSERT_OK_AND_ASSIGN(Datum out, AllKleene(array));
+    ASSERT_EQ(out.null_count(), 1);
+  }
+
+  void AssertAllKleeneIsNull(const std::string& json) {
+    auto array = ArrayFromJSON(type_singleton(), json);
+    AssertAllKleeneIsNull(array);
+  }
+
+  void AssertAllKleeneIsNull(const std::vector<std::string>& json) {
+    auto array = ChunkedArrayFromJSON(type_singleton(), json);
+    AssertAllKleeneIsNull(array);
+  }
+
+  std::shared_ptr<DataType> type_singleton() {
+    return TypeTraits<BooleanType>::type_singleton();
+  }
+};
+
+class TestAllKleeneKernel : public TestPrimitiveAllKleeneKernel {};
+
+TEST_F(TestAllKleeneKernel, Basics) {
+  std::vector<std::string> chunked_input0 = {"[]", "[true]"};
+  std::vector<std::string> chunked_input1 = {"[true, true, null]", "[true, null]"};
+  std::vector<std::string> chunked_input2 = {"[false, false, false]", "[false]"};
+  std::vector<std::string> chunked_input3 = {"[false, null]", "[null, false]"};
+  std::vector<std::string> chunked_input4 = {"[true, null]", "[null, false]"};
+  std::vector<std::string> chunked_input5 = {"[false, null]", "[null, true]"};
+
+  this->AssertAllKleeneIs("[]", true);
+  this->AssertAllKleeneIs("[false]", false);
+  this->AssertAllKleeneIs("[true, false]", false);
+  this->AssertAllKleeneIsNull("[null, null, null]");
+  this->AssertAllKleeneIs("[false, false, false]", false);
+  this->AssertAllKleeneIsNull("[false, false, false, null]");
+  this->AssertAllKleeneIsNull("[true, null, true, true]");
+  this->AssertAllKleeneIsNull("[false, null, false, true]");
+  this->AssertAllKleeneIsNull("[true, null, false, true]");
+  this->AssertAllKleeneIs(chunked_input0, true);
+  this->AssertAllKleeneIsNull(chunked_input1);
+  this->AssertAllKleeneIs(chunked_input2, false);
+  this->AssertAllKleeneIsNull(chunked_input3);
+  this->AssertAllKleeneIsNull(chunked_input4);
+  this->AssertAllKleeneIsNull(chunked_input5);
+}
+
+//
 // Mode
 //
 
