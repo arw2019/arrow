@@ -848,7 +848,6 @@ class TestPrimitiveAllKleeneKernel : public ::testing::Test {
     ASSERT_EQ(out_all_kleene, expected_all_kleene);
   }
 
-
   void AssertAllKleeneIs(const std::string& json, bool expected) {
     auto array = ArrayFromJSON(type_singleton(), json);
     AssertAllKleeneIs(array, expected);
